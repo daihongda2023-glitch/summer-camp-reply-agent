@@ -1,0 +1,62 @@
+# 夏令营自动回复 Agent 文档索引
+
+本目录用于沉淀企业微信群自动回复 agent 的产品方向、回复策略、知识库结构和资料接入清单。当前资料主要来自根目录招募文章，后续正式群公告、课程说明、作业说明、面试通知和线下手册应持续补充到知识库。
+
+## 阅读顺序
+
+1. [夏令营自动回复 Agent](ideas/summer-camp-reply-agent.md)：说明产品定位、MVP 范围、不做什么和待验证问题。
+2. [企业微信群回复策略](enterprise-wechat-reply-policy.md)：说明什么时候回复、怎么回复、什么情况必须转人工。
+3. [技术架构草案](technical-architecture.md)：说明问答内核、企业微信适配层、消息流程和接入风险。
+4. [实现计划](implementation-plan.md)：按阶段拆解 MVP 任务、验收标准和风险。
+5. [夏令营 Agent 知识库结构](knowledge-base/README.md)：定义阶段分类、字段规范和资料优先级。
+6. [种子 FAQ](knowledge-base/seed-faq.md)：当前可直接用于自动回复的基础问答。
+7. [后续资料接入清单](source-intake-checklist.md)：后续拿到新资料时，用它检查哪些信息还缺。
+
+## 决策记录
+
+- [ADR-001: 采用问答内核与企业微信适配层分离的架构](decisions/ADR-001-enterprise-wechat-agent-architecture.md)
+
+## 本地开发命令
+
+当前已实现不依赖企业微信的本地问答内核，可先用于知识库校验和运营半自动演练。
+
+| 命令 | 说明 |
+| --- | --- |
+| `python -m unittest discover -s tests` | 运行完整测试 |
+| `python -m summer_camp_agent.cli validate` | 校验默认知识库 `data/faq.json` |
+| `python scripts/validate_knowledge.py data/faq.json` | 使用脚本校验指定知识库 |
+| `python -m summer_camp_agent.cli ask "报名入口在哪里？"` | 输入学生问题并生成建议回复 |
+| `python -m summer_camp_agent.cli ask "报名入口在哪里？" --today 2026-07-16` | 按指定日期测试过期停答规则 |
+| `python -m summer_camp_agent.cli review "报名入口在哪里？"` | 生成运营半自动审核卡，展示建议动作、候选回复和资料来源 |
+| `python -m summer_camp_agent.cli review "营服是什么颜色？" --pending-log data/pending_questions.jsonl` | 对未覆盖问题生成审核卡，并写入待补充 JSONL 清单 |
+| 双击 `启动夏令营Agent.cmd` | 打开本地桌面聊天窗口，直接输入问题验证效果 |
+| `python -B -m summer_camp_agent.gui` | 从命令行启动同一个桌面聊天窗口 |
+
+## 桌面验证修正功能
+
+桌面版支持临时教学模式。先问一个问题，如果回答不符合预期，可以继续输入：
+
+```text
+修正上个问题的回答结果：这里写正确答案
+```
+
+系统不会把这句话当成普通问题回答，而是把“上一个普通问题”和“修正答案”写入 `data/local_overrides.json`。下一次再问同一个问题时，会优先使用这条本地修正答案。
+
+这个功能只用于资料不完整时快速验证问答效果。真实接入企业微信后应关闭本地修正覆盖，避免群内用户通过聊天修改知识库。
+
+## 运营半自动流程
+
+第一版不直接接入企业微信群自动读取消息。运营可以先把学生问题复制到 `review` 命令，检查建议动作后再决定如何处理：
+
+- `send`：资料明确、可直接发送给学生。
+- `edit`：可在发送前人工微调措辞。
+- `escalate`：涉及个人状态、安全医疗、投诉争议、技术作业等，转人工负责人。
+- `mark_pending`：当前资料未覆盖，写入待补充清单，等组委会确认后再更新知识库。
+
+## 维护原则
+
+- 只把官方明确或组委会确认的信息写进可自动回复内容。
+- 时间、地点、报名入口、名单、作业规则等高风险信息必须保留资料来源和更新时间。
+- 如果新资料与旧资料冲突，以发布渠道更正式、更新时间更新的资料为准，并保留冲突记录。
+- 涉及个人状态、录取结果、医疗安全、投诉争议和技术作业答案的问题，默认不自动回复，必须转人工。
+- 若系统还没有真实记录能力，回复中不要承诺“已记录”，只能说“建议标记为待补充”。

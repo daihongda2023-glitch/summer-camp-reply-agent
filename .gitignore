@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+*.pem
+*.key
+
+data/local_overrides.json
+data/pending_questions.jsonl
