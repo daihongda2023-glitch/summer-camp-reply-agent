@@ -1,0 +1,71 @@
+import inspect
+import unittest
+
+from summer_camp_agent.wechat_assisted_paste import AssistedPasteAdapter, PasteResult
+
+
+class FakeBackend:
+    def __init__(self, can_paste=True):
+        self.can_paste = can_paste
+        self.clipboard_text = ""
+        self.shortcuts = []
+
+    def set_clipboard_text(self, text):
+        self.clipboard_text = text
+
+    def foreground_window_title(self):
+        return "微信"
+
+    def send_ctrl_v(self):
+        if not self.can_paste:
+            raise OSError("paste failed")
+        self.shortcuts.append("CTRL+V")
+
+
+class WechatAssistedPasteTest(unittest.TestCase):
+    def test_copy_only_rejects_empty_text(self):
+        result = AssistedPasteAdapter(FakeBackend()).copy_only("   ")
+
+        self.assertEqual(result.action, "failed")
+        self.assertIn("不能为空", result.message)
+
+    def test_copy_only_writes_clipboard_without_paste(self):
+        backend = FakeBackend()
+
+        result = AssistedPasteAdapter(backend).copy_only("同学你好")
+
+        self.assertEqual(result.action, "copied")
+        self.assertEqual(backend.clipboard_text, "同学你好")
+        self.assertEqual(backend.shortcuts, [])
+
+    def test_paste_to_foreground_uses_only_ctrl_v(self):
+        backend = FakeBackend()
+
+        result = AssistedPasteAdapter(backend).paste_to_foreground("同学你好")
+
+        self.assertEqual(result.action, "pasted")
+        self.assertEqual(backend.shortcuts, ["CTRL+V"])
+        self.assertEqual(result.foreground_window_title, "微信")
+
+    def test_paste_failure_downgrades_to_copied(self):
+        backend = FakeBackend(can_paste=False)
+
+        result = AssistedPasteAdapter(backend).paste_to_foreground("同学你好")
+
+        self.assertEqual(result.action, "copied")
+        self.assertIn("已复制到剪贴板", result.message)
+
+    def test_module_does_not_send_enter_or_mouse_clicks(self):
+        import summer_camp_agent.wechat_assisted_paste as module
+
+        source = inspect.getsource(module).lower()
+
+        self.assertNotIn("vk_return", source)
+        self.assertNotIn("mouseevent", source)
+        self.assertNotIn("leftdown", source)
+        self.assertNotIn("leftup", source)
+        self.assertIsInstance(PasteResult("copied", "ok"), PasteResult)
+
+
+if __name__ == "__main__":
+    unittest.main()
