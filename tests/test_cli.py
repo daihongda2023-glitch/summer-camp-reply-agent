@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,29 @@ class CLITest(unittest.TestCase):
 
             self.assertIn("recommendation: mark_pending", completed.stdout)
             self.assertIn("pending_saved: true", completed.stdout)
+
+    def test_import_weflow_requires_token_environment_variable(self):
+        env = dict(os.environ)
+        env.pop("WEFLOW_API_TOKEN", None)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "summer_camp_agent.cli",
+                "import-weflow",
+                "--group",
+                "测试群",
+                "--keywords",
+                "报名,住宿",
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            env=env,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("缺少 WEFLOW_API_TOKEN", completed.stderr)
 
 
 if __name__ == "__main__":

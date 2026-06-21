@@ -29,8 +29,19 @@
 | `python -m summer_camp_agent.cli ask "报名入口在哪里？" --today 2026-07-16` | 按指定日期测试过期停答规则 |
 | `python -m summer_camp_agent.cli review "报名入口在哪里？"` | 生成运营半自动审核卡，展示建议动作、候选回复和资料来源 |
 | `python -m summer_camp_agent.cli review "营服是什么颜色？" --pending-log data/pending_questions.jsonl` | 对未覆盖问题生成审核卡，并写入待补充 JSONL 清单 |
+| `python -m summer_camp_agent.cli import-weflow --group "沐曦开源英才夏令营咨询群" --keywords "报名,报到,住宿,交通" --start 20260601 --end 20260630` | 从已启动的 WeFlow 本地 API 导入指定微信群聊天记录，输出脱敏 JSONL |
 | 双击 `启动夏令营Agent.cmd` | 打开本地桌面聊天窗口，直接输入问题验证效果 |
 | `python -B -m summer_camp_agent.gui` | 从命令行启动同一个桌面聊天窗口 |
+
+## WeFlow 聊天记录导入
+
+导入前需要用户手动启动 WeFlow，在设置中开启 API 服务，并将 API Token 放入环境变量：
+
+```powershell
+$env:WEFLOW_API_TOKEN="你的 WeFlow Token"
+```
+
+本项目不会读取或解密微信数据库，只消费 WeFlow 本地 API 返回的数据。导出的聊天记录默认写入 `imports/chat_logs/`，该目录已被 `.gitignore` 忽略。聊天记录只用于说话风格蒸馏和高频问题发现，不能直接作为官方事实答案。
 
 ## 桌面验证修正功能
 
