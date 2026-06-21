@@ -27,6 +27,7 @@ class WeChatBridgeConfig:
     keywords: list[str] = field(default_factory=lambda: ["报名", "报到", "住宿", "交通", "作业", "面试", "GPU", "算子"])
     poll_interval_seconds: int = 5
     enabled: bool = True
+    show_debug_config: bool = False
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "WeChatBridgeConfig":
@@ -38,6 +39,7 @@ class WeChatBridgeConfig:
             keywords=[str(item).strip() for item in raw.get("keywords", []) if str(item).strip()],
             poll_interval_seconds=int(raw.get("poll_interval_seconds") or 5),
             enabled=bool(raw.get("enabled", True)),
+            show_debug_config=bool(raw.get("show_debug_config", False)),
         )
         config.validate()
         return config

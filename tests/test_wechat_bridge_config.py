@@ -42,6 +42,31 @@ class WeChatBridgeConfigTest(unittest.TestCase):
         self.assertNotIn("access_token", raw)
         self.assertNotIn("secret-token", json.dumps(raw, ensure_ascii=False))
 
+    def test_config_from_dict_defaults_debug_config_to_false(self):
+        config = WeChatBridgeConfig.from_dict({"group_name": "test group"})
+
+        self.assertFalse(config.show_debug_config)
+
+    def test_config_store_round_trips_debug_config_switch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wechat_bridge_config.json"
+            store = WeChatBridgeConfigStore(path)
+            config = WeChatBridgeConfig(
+                group_name="test group",
+                session_id="room@chatroom",
+                keywords=["signup"],
+                poll_interval_seconds=5,
+                enabled=True,
+                show_debug_config=True,
+            )
+
+            store.save(config)
+            loaded = store.load()
+            raw = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertTrue(loaded.show_debug_config)
+        self.assertTrue(raw["show_debug_config"])
+
     def test_listener_state_store_hashes_session_and_caps_seen_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "listener_state.json"
