@@ -64,3 +64,13 @@ class ReplyLogEntry:
     confidence: float
     operator_action: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class ReplyDecision:
+    mode: str
+    reply: str
+    source: str = ""
+    confidence: float = 0.0
+    reason: str = ""
+    requires_review: bool = True
