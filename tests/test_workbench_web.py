@@ -14,6 +14,9 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("confirmSent()", WORKBENCH_HTML)
         self.assertIn("setInterval", WORKBENCH_HTML)
         self.assertIn("/api/wechat/poll", WORKBENCH_HTML)
+        self.assertIn("grid-template-rows: minmax(92px, 1fr) auto;", WORKBENCH_HTML)
+        self.assertIn("flex-wrap: wrap;", WORKBENCH_HTML)
+        self.assertIn("justify-content: flex-end;", WORKBENCH_HTML)
 
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:

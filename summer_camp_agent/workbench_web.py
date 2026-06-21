@@ -312,7 +312,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       height: calc(100vh - 52px);
       display: grid;
       grid-template-columns: 230px minmax(420px, 1fr) 360px;
-      grid-template-rows: 1fr 150px 32px;
+      grid-template-rows: minmax(0, 1fr) auto 32px;
     }
     aside, section {
       min-width: 0;
@@ -448,24 +448,36 @@ WORKBENCH_HTML = r"""<!doctype html>
       grid-column: 1 / 4;
       grid-row: 2;
       display: grid;
-      grid-template-columns: 1fr 104px;
-      gap: 10px;
+      grid-template-rows: minmax(92px, 1fr) auto;
+      gap: 8px;
       padding: 12px;
+      min-height: 176px;
       border-top: 1px solid var(--line);
       background: #fff;
     }
     textarea {
       width: 100%;
-      height: 126px;
+      height: 100%;
+      min-height: 92px;
       resize: none;
       border: 1px solid var(--line);
       padding: 10px;
       font: inherit;
     }
     .reply-actions {
-      display: grid;
+      display: flex;
+      flex-wrap: wrap;
       gap: 8px;
-      align-content: start;
+      justify-content: flex-end;
+      align-items: center;
+    }
+    .reply-actions button {
+      min-width: 96px;
+      min-height: 36px;
+      white-space: nowrap;
+    }
+    .reply-actions button.primary {
+      min-width: 112px;
     }
     .statusbar {
       grid-column: 1 / 4;
@@ -486,6 +498,7 @@ WORKBENCH_HTML = r"""<!doctype html>
     @media (max-width: 980px) {
       main {
         grid-template-columns: 190px minmax(320px, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto minmax(220px, 35vh);
       }
       .decision {
         grid-column: 1 / 3;
