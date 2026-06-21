@@ -35,3 +35,32 @@ class TriggerDecision:
     should_process: bool
     reasons: list[str]
     matched_keywords: list[str]
+
+
+@dataclass(frozen=True)
+class ReplyCandidate:
+    candidate_id: str
+    group_name: str
+    original_question: str
+    agent_reply: str
+    edited_reply: str
+    source: str
+    confidence: float
+    candidate_type: str
+    status: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ReplyLogEntry:
+    log_id: str
+    group_name: str
+    trigger_message_hash: str
+    trigger_reasons: list[str]
+    mode: str
+    action: str
+    reply: str
+    source: str
+    confidence: float
+    operator_action: str
+    created_at: str
