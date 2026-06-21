@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.workbench_sources import ChatSourceError, JsonlChatSource
+from summer_camp_agent.workbench_sources import ChatSourceError, JsonlChatSource, load_events_from_jsonl_text
 
 
 class WorkbenchSourcesTest(unittest.TestCase):
@@ -45,6 +45,25 @@ class WorkbenchSourcesTest(unittest.TestCase):
         self.assertGreaterEqual(len(events), 4)
         self.assertTrue(any("报名入口" in event.content for event in events))
         self.assertTrue(any(event.source == "demo_jsonl" for event in events))
+
+    def test_reads_jsonl_text_as_chat_events(self):
+        text = json.dumps(
+            {
+                "group_name": "夏令营咨询群",
+                "group_id_hash": "sha256:group",
+                "message_time": "2026-06-21 10:00:00",
+                "sender_alias": "成员001",
+                "content": "报名入口在哪里？",
+                "platform_message_id_hash": "sha256:msg",
+                "source": "browser_upload",
+            },
+            ensure_ascii=False,
+        )
+
+        events = load_events_from_jsonl_text(text)
+
+        self.assertEqual(events[0].event_id, "sha256:msg")
+        self.assertEqual(events[0].source, "browser_upload")
 
 
 if __name__ == "__main__":

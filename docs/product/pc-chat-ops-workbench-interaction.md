@@ -242,9 +242,9 @@ flowchart TD
 
 ## 第一版启动方式
 
-双击 `启动夏令营Agent.cmd` 后默认进入 PC 端群聊答疑运营工作台。
+双击 `启动夏令营Agent.cmd` 后默认启动本地服务，并自动打开浏览器版 PC 端群聊答疑运营工作台。
 
-旧的单轮对话验证能力仍可通过 `python -m summer_camp_agent.gui` 启动。
+Tkinter 版工作台仍可通过 `python -m summer_camp_agent.workbench_gui` 启动；如果本机 Tcl/Tk 运行时不完整，使用默认浏览器版。旧的单轮对话验证能力仍可通过 `python -m summer_camp_agent.gui` 启动。
 
 ## 当前 MVP 可演示能力
 

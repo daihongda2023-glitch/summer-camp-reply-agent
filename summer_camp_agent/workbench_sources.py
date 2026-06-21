@@ -18,25 +18,28 @@ class JsonlChatSource:
         if not self.path.exists():
             raise ChatSourceError(f"聊天记录文件不存在：{self.path}")
 
+        return load_events_from_jsonl_text(self.path.read_text(encoding="utf-8"))
+
+
+def load_events_from_jsonl_text(text: str) -> list[ChatEvent]:
         events: list[ChatEvent] = []
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                raw = json.loads(line)
-                if not isinstance(raw, dict):
-                    continue
-                events.append(
-                    ChatEvent(
-                        event_id=str(raw.get("platform_message_id_hash") or raw.get("event_id") or ""),
-                        group_id_hash=str(raw.get("group_id_hash") or ""),
-                        group_name=str(raw.get("group_name") or ""),
-                        sender_alias=str(raw.get("sender_alias") or ""),
-                        sender_role=str(raw.get("sender_role") or "unknown"),
-                        message_time=str(raw.get("message_time") or ""),
-                        content=str(raw.get("content") or ""),
-                        raw_type=str(raw.get("raw_type") or "text"),
-                        source=str(raw.get("source") or "jsonl"),
-                    )
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            raw = json.loads(line)
+            if not isinstance(raw, dict):
+                continue
+            events.append(
+                ChatEvent(
+                    event_id=str(raw.get("platform_message_id_hash") or raw.get("event_id") or ""),
+                    group_id_hash=str(raw.get("group_id_hash") or ""),
+                    group_name=str(raw.get("group_name") or ""),
+                    sender_alias=str(raw.get("sender_alias") or ""),
+                    sender_role=str(raw.get("sender_role") or "unknown"),
+                    message_time=str(raw.get("message_time") or ""),
+                    content=str(raw.get("content") or ""),
+                    raw_type=str(raw.get("raw_type") or "text"),
+                    source=str(raw.get("source") or "jsonl"),
                 )
+            )
         return events
