@@ -54,5 +54,79 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertEqual(payload["items"][0]["source"], "browser_upload")
 
 
+class FakeListener:
+    def __init__(self, events):
+        self.events = events
+        self.poll_count = 0
+
+    def poll_once(self):
+        from summer_camp_agent.wechat_live_listener import ListenerPollResult
+
+        self.poll_count += 1
+        return ListenerPollResult("ok", "ok", self.events)
+
+
+class FakePasteAdapter:
+    def __init__(self):
+        self.pasted = []
+
+    def paste_to_foreground(self, text):
+        from summer_camp_agent.wechat_assisted_paste import PasteResult
+
+        self.pasted.append(text)
+        return PasteResult("pasted", "已填入当前前台窗口，请在微信中确认后手动发送。", "微信")
+
+
+class WorkbenchWebWechatBridgeTest(unittest.TestCase):
+    def test_poll_wechat_once_adds_listener_events_to_items(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-live",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-06-21 10:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_listener = FakeListener([event])
+
+            payload = state.poll_wechat_once()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["items"][0]["event_id"], "evt-live")
+
+    def test_paste_reply_logs_paste_but_not_confirmed_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+
+            result = state.paste_reply(item["event_id"], item["reply"])
+
+            self.assertEqual(result["paste_action"], "pasted")
+            log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("pasted_to_wechat", log_text)
+            self.assertNotIn("operator_confirmed_sent", log_text)
+
+    def test_confirm_sent_records_operator_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            item = state.ask("报名入口在哪里？")["item"]
+
+            result = state.confirm_sent(item["event_id"], item["reply"])
+
+            self.assertEqual(result["status"], "ok")
+            self.assertIn("operator_confirmed_sent", (root / "logs.jsonl").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

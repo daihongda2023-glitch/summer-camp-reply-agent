@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 import webbrowser
 
 from .chat_log_sanitizer import hash_identifier
+from .wechat_assisted_paste import AssistedPasteAdapter
+from .wechat_bridge_config import WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_live_listener import WeFlowLiveListener
 from .workbench_models import ChatEvent, GroupConfig
 from .workbench_presenter import build_demo_events, format_item_summary, status_label
 from .workbench_session import DEFAULT_CANDIDATE_PATH, DEFAULT_LOG_PATH, WorkbenchItem, WorkbenchSession
@@ -26,6 +29,10 @@ class WorkbenchWebState:
         self.group_config = group_config or GroupConfig(group_name="夏令营咨询群", mode="semi_auto")
         self.session = WorkbenchSession(self.group_config, candidate_path=candidate_path, log_path=log_path)
         self.items: list[WorkbenchItem] = []
+        self.wechat_config = WeChatBridgeConfig()
+        self.wechat_listener = None
+        self.wechat_listener_running = False
+        self.paste_adapter = AssistedPasteAdapter()
 
     def load_demo_items(self) -> dict[str, Any]:
         self.items = [self.session.process_event(event) for event in build_demo_events()]
@@ -67,6 +74,53 @@ class WorkbenchWebState:
         if not self.session.save_candidate(item, reply):
             raise ValueError("候选回复不能为空")
         return {"status": "ok", "message": "已保存到待审核候选库"}
+
+    def configure_wechat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.wechat_config = WeChatBridgeConfig.from_dict(payload)
+        WeChatBridgeConfigStore().save(self.wechat_config)
+        return {"status": "ok", "message": "配置已保存", "config": self.wechat_config.to_dict()}
+
+    def start_wechat_listener(self) -> dict[str, Any]:
+        self.wechat_listener = WeFlowLiveListener(self.wechat_config)
+        self.wechat_listener_running = True
+        return {
+            "status": "ok",
+            "message": "已开始监听",
+            "listener_state": {"running": True, "group_name": self.wechat_config.group_name},
+        }
+
+    def stop_wechat_listener(self) -> dict[str, str]:
+        self.wechat_listener_running = False
+        return {"status": "ok", "message": "已停止监听"}
+
+    def poll_wechat_once(self) -> dict[str, Any]:
+        if self.wechat_listener is None:
+            return {"status": "error", "message": "请先开始监听", "items": [serialize_item(item) for item in self.items]}
+        result = self.wechat_listener.poll_once()
+        if result.status == "ok":
+            for event in result.events:
+                self.items.append(self.session.process_event(event))
+        return {"status": result.status, "message": result.message, "items": [serialize_item(item) for item in self.items]}
+
+    def paste_reply(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        result = self.paste_adapter.paste_to_foreground(reply)
+        operator_action = {
+            "pasted": "pasted_to_wechat",
+            "copied": "copied_to_clipboard",
+        }.get(result.action, "paste_failed")
+        self.session.record_operator_action(item, reply, operator_action=operator_action, action="paste")
+        return {
+            "status": "ok",
+            "paste_action": result.action,
+            "message": result.message,
+            "foreground_window_title": result.foreground_window_title,
+        }
+
+    def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        self.session.confirm_operator_sent(item, reply)
+        return {"status": "ok", "message": "已记录运营确认发送"}
 
     def _find_item(self, event_id: str) -> WorkbenchItem:
         for item in self.items:
@@ -130,6 +184,24 @@ def create_handler(state: WorkbenchWebState):
                     self._send_json(
                         state.save_candidate(str(payload.get("event_id") or ""), str(payload.get("reply") or ""))
                     )
+                    return
+                if path == "/api/wechat/config":
+                    self._send_json(state.configure_wechat(payload))
+                    return
+                if path == "/api/wechat/start":
+                    self._send_json(state.start_wechat_listener())
+                    return
+                if path == "/api/wechat/stop":
+                    self._send_json(state.stop_wechat_listener())
+                    return
+                if path == "/api/wechat/poll":
+                    self._send_json(state.poll_wechat_once())
+                    return
+                if path == "/api/wechat/paste":
+                    self._send_json(state.paste_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/wechat/confirm-sent":
+                    self._send_json(state.confirm_sent(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
                     return
                 self._send_json({"error": "未找到接口"}, status=404)
             except Exception as exc:  # noqa: BLE001 - local UI should surface friendly errors
