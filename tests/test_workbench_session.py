@@ -110,6 +110,59 @@ class WorkbenchSessionTest(unittest.TestCase):
             self.assertIn("营服颜色", (root / "candidates.jsonl").read_text(encoding="utf-8"))
             self.assertFalse((root / "logs.jsonl").exists())
 
+    def test_record_operator_action_logs_paste_without_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(group_name="夏令营咨询群", mode="semi_auto", keywords=["报名"]),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            event = ChatEvent(
+                "evt-paste",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-06-21 10:00:00",
+                "报名入口在哪里？",
+                "text",
+                "manual",
+            )
+            item = session.process_event(event)
+
+            session.record_operator_action(item, item.review_card.reply, operator_action="pasted_to_wechat", action="paste")
+
+            log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("pasted_to_wechat", log_text)
+            self.assertNotIn("operator_confirmed_sent", log_text)
+
+    def test_confirm_operator_sent_saves_edited_candidate_and_confirmed_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(group_name="夏令营咨询群", mode="semi_auto", keywords=["报名"]),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            event = ChatEvent(
+                "evt-confirm",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-06-21 10:00:00",
+                "报名入口在哪里？",
+                "text",
+                "manual",
+            )
+            item = session.process_event(event)
+
+            session.confirm_operator_sent(item, "同学你好，报名入口请看官方链接。")
+
+            self.assertIn("官方链接", (root / "candidates.jsonl").read_text(encoding="utf-8"))
+            self.assertIn("edited_and_confirmed_sent", (root / "logs.jsonl").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

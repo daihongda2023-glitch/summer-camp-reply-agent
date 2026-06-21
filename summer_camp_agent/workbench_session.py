@@ -97,6 +97,43 @@ class WorkbenchSession:
         self._append_candidate(item, reply, datetime.now(timezone.utc).isoformat(), candidate_type)
         return True
 
+    def confirm_operator_sent(self, item: WorkbenchItem, edited_reply: str) -> None:
+        reply = edited_reply.strip()
+        if not reply:
+            return
+        operator_action = "edited_and_confirmed_sent" if reply != item.review_card.reply.strip() else "operator_confirmed_sent"
+        if operator_action == "edited_and_confirmed_sent":
+            self._append_candidate(item, reply, datetime.now(timezone.utc).isoformat())
+        self.record_operator_action(item, reply, operator_action=operator_action, action="confirm_sent")
+
+    def record_operator_action(
+        self,
+        item: WorkbenchItem,
+        reply: str,
+        *,
+        operator_action: str,
+        action: str,
+    ) -> None:
+        text = reply.strip()
+        if not text:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        self.log_store.append(
+            ReplyLogEntry(
+                log_id=hash_identifier(f"{item.event.event_id}:{text}:{operator_action}:{now}"),
+                group_name=item.event.group_name,
+                trigger_message_hash=hash_identifier(item.event.event_id),
+                trigger_reasons=item.trigger.reasons,
+                mode=item.reply_decision.mode,
+                action=action,
+                reply=text,
+                source=item.review_card.source,
+                confidence=item.review_card.confidence,
+                operator_action=operator_action,
+                created_at=now,
+            )
+        )
+
     def _append_candidate(
         self,
         item: WorkbenchItem,
