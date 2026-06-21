@@ -12,6 +12,7 @@ data/chat_groups.json
 data/reply_candidates.jsonl
 data/reply_logs.jsonl
 data/listener_state.json
+data/wechat_bridge_config.json
 
 # 微信/WeFlow 导入数据与派生索引，默认只保留在本地
 imports/chat_logs/
