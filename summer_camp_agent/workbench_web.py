@@ -348,6 +348,23 @@ WORKBENCH_HTML = r"""<!doctype html>
       gap: 8px;
       margin-top: 14px;
     }
+    .bridge {
+      display: grid;
+      gap: 6px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .bridge label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .bridge input {
+      width: 100%;
+      border: 1px solid var(--line);
+      padding: 7px 8px;
+      font: inherit;
+    }
     button, input[type="file"]::file-selector-button {
       border: 1px solid var(--line);
       background: #fff;
@@ -496,10 +513,21 @@ WORKBENCH_HTML = r"""<!doctype html>
       <div class="group active">夏令营咨询群<small>监听演示中</small></div>
       <div class="group">入营通知群<small>待接入</small></div>
       <div class="group">技术答疑群<small>待接入</small></div>
+      <div class="bridge">
+        <label for="wechatGroupName">群聊名称</label>
+        <input id="wechatGroupName" value="沐曦开源英才夏令营咨询群">
+        <label for="wechatKeywords">关键词</label>
+        <input id="wechatKeywords" value="报名,报到,住宿,交通,作业,面试,GPU,算子">
+        <label for="wechatPollSeconds">轮询间隔</label>
+        <input id="wechatPollSeconds" type="number" min="2" max="60" value="5">
+      </div>
       <div class="actions">
+        <button onclick="saveWechatConfig()">保存监听配置</button>
+        <button onclick="startWechatListener()">开始监听</button>
+        <button onclick="pollWechatOnce()">拉取新消息</button>
+        <button onclick="stopWechatListener()">停止监听</button>
         <button onclick="loadDemo()">载入演示</button>
         <button onclick="document.getElementById('jsonlFile').click()">导入 JSONL</button>
-        <button onclick="setStatus('已暂停监听。本地 MVP 当前以演示数据和 JSONL 导入为主。')">暂停监听</button>
       </div>
       <div class="upload">
         <input id="jsonlFile" type="file" accept=".jsonl,.txt" onchange="importJsonlFile()" hidden>
@@ -517,7 +545,9 @@ WORKBENCH_HTML = r"""<!doctype html>
       <textarea id="replyBox" placeholder="选择消息后这里会自动填入草稿；也可以直接输入学生问题后点击生成草稿。"></textarea>
       <div class="reply-actions">
         <button onclick="askManual()">生成草稿</button>
-        <button class="primary" onclick="sendReply()">发送</button>
+        <button class="primary" onclick="pasteToWechat()">填入微信</button>
+        <button onclick="confirmSent()">我已发送</button>
+        <button onclick="sendReply()">记录发送</button>
         <button onclick="saveCandidate()">保存候选</button>
         <button onclick="copyReply()">复制</button>
       </div>
@@ -527,6 +557,7 @@ WORKBENCH_HTML = r"""<!doctype html>
   <script>
     let items = [];
     let selectedId = null;
+    let wechatPollTimer = null;
 
     async function requestJson(path, body) {
       const options = body === undefined ? {} : {
@@ -542,6 +573,39 @@ WORKBENCH_HTML = r"""<!doctype html>
 
     function setStatus(text) {
       document.getElementById('statusbar').textContent = text;
+    }
+
+    function readWechatConfig() {
+      return {
+        base_url: 'http://127.0.0.1:5031',
+        token_env: 'WEFLOW_API_TOKEN',
+        group_name: document.getElementById('wechatGroupName').value.trim(),
+        session_id: '',
+        keywords: document.getElementById('wechatKeywords').value.split(',').map(x => x.trim()).filter(Boolean),
+        poll_interval_seconds: Number(document.getElementById('wechatPollSeconds').value || 5),
+        enabled: true
+      };
+    }
+
+    function normalizePollIntervalSeconds() {
+      const raw = Number(document.getElementById('wechatPollSeconds').value || 5);
+      if (!Number.isFinite(raw)) return 5;
+      return Math.max(2, Math.min(60, raw));
+    }
+
+    function clearWechatPolling() {
+      if (wechatPollTimer) {
+        window.clearInterval(wechatPollTimer);
+        wechatPollTimer = null;
+      }
+    }
+
+    function scheduleWechatPolling() {
+      clearWechatPolling();
+      const intervalMs = normalizePollIntervalSeconds() * 1000;
+      wechatPollTimer = window.setInterval(() => {
+        pollWechatOnce();
+      }, intervalMs);
     }
 
     function renderItems(nextItems) {
@@ -628,6 +692,50 @@ WORKBENCH_HTML = r"""<!doctype html>
       }
     }
 
+    async function saveWechatConfig() {
+      try {
+        const data = await requestJson('/api/wechat/config', readWechatConfig());
+        setStatus(data.message);
+        return data;
+      } catch (error) {
+        setStatus(error.message);
+        return null;
+      }
+    }
+
+    async function startWechatListener() {
+      try {
+        const saved = await saveWechatConfig();
+        if (!saved) return;
+        const data = await requestJson('/api/wechat/start', {});
+        setStatus(data.message);
+        scheduleWechatPolling();
+        await pollWechatOnce();
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
+    async function stopWechatListener() {
+      clearWechatPolling();
+      try {
+        const data = await requestJson('/api/wechat/stop', {});
+        setStatus(data.message);
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
+    async function pollWechatOnce() {
+      try {
+        const data = await requestJson('/api/wechat/poll', {});
+        renderItems(data.items);
+        setStatus(data.message);
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
     async function askManual() {
       const question = document.getElementById('replyBox').value.trim();
       if (!question) {
@@ -676,6 +784,44 @@ WORKBENCH_HTML = r"""<!doctype html>
       }
     }
 
+    async function pasteToWechat() {
+      if (!selectedId) {
+        setStatus('请先选择一条消息。');
+        return;
+      }
+      const reply = document.getElementById('replyBox').value.trim();
+      if (!reply) {
+        setStatus('回复内容不能为空。');
+        return;
+      }
+      const confirmed = window.confirm('请先把光标放到目标微信群输入框。本操作只粘贴，不会自动发送。继续吗？');
+      if (!confirmed) return;
+      try {
+        const data = await requestJson('/api/wechat/paste', {event_id: selectedId, reply});
+        setStatus(data.message);
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
+    async function confirmSent() {
+      if (!selectedId) {
+        setStatus('请先选择一条消息。');
+        return;
+      }
+      const reply = document.getElementById('replyBox').value.trim();
+      if (!reply) {
+        setStatus('回复内容不能为空。');
+        return;
+      }
+      try {
+        const data = await requestJson('/api/wechat/confirm-sent', {event_id: selectedId, reply});
+        setStatus(data.message);
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
     async function copyReply() {
       const reply = document.getElementById('replyBox').value;
       if (!reply.trim()) {
@@ -687,6 +833,7 @@ WORKBENCH_HTML = r"""<!doctype html>
     }
 
     window.addEventListener('DOMContentLoaded', loadDemo);
+    window.addEventListener('beforeunload', clearWechatPolling);
   </script>
 </body>
 </html>

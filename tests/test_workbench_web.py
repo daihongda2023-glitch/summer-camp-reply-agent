@@ -3,10 +3,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.workbench_web import WorkbenchWebState
+from summer_camp_agent.workbench_web import WORKBENCH_HTML, WorkbenchWebState, create_handler
 
 
 class WorkbenchWebTest(unittest.TestCase):
+    def test_html_exposes_wechat_assisted_controls(self):
+        self.assertIn('id="wechatGroupName"', WORKBENCH_HTML)
+        self.assertIn("saveWechatConfig()", WORKBENCH_HTML)
+        self.assertIn("pasteToWechat()", WORKBENCH_HTML)
+        self.assertIn("confirmSent()", WORKBENCH_HTML)
+        self.assertIn("setInterval", WORKBENCH_HTML)
+        self.assertIn("/api/wechat/poll", WORKBENCH_HTML)
+
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,6 +134,36 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "ok")
             self.assertIn("operator_confirmed_sent", (root / "logs.jsonl").read_text(encoding="utf-8"))
+
+    def test_wechat_paste_route_returns_structured_result(self):
+        from http.server import ThreadingHTTPServer
+        import threading
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/wechat/paste",
+                    data=json.dumps({"event_id": item["event_id"], "reply": item["reply"]}, ensure_ascii=False).encode(
+                        "utf-8"
+                    ),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                payload = json.loads(urllib.request.urlopen(request, timeout=5).read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(payload["paste_action"], "pasted")
+        self.assertIn("手动发送", payload["message"])
 
 
 if __name__ == "__main__":
