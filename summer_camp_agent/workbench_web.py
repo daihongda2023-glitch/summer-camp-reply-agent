@@ -695,15 +695,50 @@ WORKBENCH_HTML = r"""<!doctype html>
       setStatus(`当前消息：${item.status}`);
     }
 
+    const triggerReasonLabels = {
+      keyword: '关键词命中',
+      question_mark: '问号问题',
+      mention: '被 @ 提及'
+    };
+    const recommendationLabels = {
+      send: '建议发送',
+      edit: '建议编辑',
+      escalate: '转人工处理',
+      mark_pending: '标记待补充',
+      ignore: '忽略'
+    };
+    const engineActionLabels = {
+      auto_reply: '自动回复',
+      suggested_reply: '建议回复',
+      human_fallback: '转人工处理',
+      needs_info: '需要补充资料'
+    };
+    const intentLabels = {
+      'registration.link': '报名入口',
+      'selection.result': '录取结果',
+      'cost.accommodation': '食宿费用',
+      'technical.assignment': '技术作业',
+      'rag.document': '资料库匹配'
+    };
+
+    function formatDecisionValue(value, labels, emptyText) {
+      if (Array.isArray(value)) {
+        if (!value.length) return emptyText;
+        return value.map(item => labels[item] || item).join(', ');
+      }
+      if (!value) return emptyText;
+      return labels[value] || value;
+    }
+
     function renderDetails(item) {
       const rows = [
         ['学生问题', item.question],
         ['处理状态', item.status],
-        ['触发原因', item.trigger_reasons.length ? item.trigger_reasons.join(', ') : '未触发'],
+        ['触发原因', formatDecisionValue(item.trigger_reasons, triggerReasonLabels, '未触发')],
         ['命中关键词', item.matched_keywords.length ? item.matched_keywords.join(', ') : '无'],
-        ['建议动作', item.recommendation || '无'],
-        ['引擎动作', item.engine_action || '无'],
-        ['意图', item.intent || '未知'],
+        ['建议动作', formatDecisionValue(item.recommendation, recommendationLabels, '无')],
+        ['引擎动作', formatDecisionValue(item.engine_action, engineActionLabels, '无')],
+        ['意图', formatDecisionValue(item.intent, intentLabels, '未知')],
         ['来源', item.answer_source || '无'],
         ['置信度', Number(item.confidence || 0).toFixed(2)],
         ['模式决策', item.mode],

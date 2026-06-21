@@ -25,6 +25,18 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("show_debug_config", WORKBENCH_HTML)
         self.assertNotIn("session_id: ''", WORKBENCH_HTML)
 
+    def test_html_maps_decision_panel_machine_values_to_chinese(self):
+        self.assertIn("formatDecisionValue", WORKBENCH_HTML)
+        self.assertIn("triggerReasonLabels", WORKBENCH_HTML)
+        self.assertIn("recommendationLabels", WORKBENCH_HTML)
+        self.assertIn("engineActionLabels", WORKBENCH_HTML)
+        self.assertIn("intentLabels", WORKBENCH_HTML)
+        self.assertIn("关键词命中", WORKBENCH_HTML)
+        self.assertIn("问号问题", WORKBENCH_HTML)
+        self.assertIn("建议发送", WORKBENCH_HTML)
+        self.assertIn("自动回复", WORKBENCH_HTML)
+        self.assertIn("报名入口", WORKBENCH_HTML)
+
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
