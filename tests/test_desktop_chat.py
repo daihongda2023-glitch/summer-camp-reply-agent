@@ -6,11 +6,15 @@ from summer_camp_agent.desktop_chat import DesktopChatSession
 from summer_camp_agent.gui import SummerCampAgentApp
 from summer_camp_agent.rag_embeddings import DEFAULT_EMBEDDING_MODEL, StaticEmbeddingProvider
 from summer_camp_agent.rag_index import build_rag_index
+from summer_camp_agent.workbench_gui import SummerCampWorkbenchApp
 
 
 class DesktopChatSessionTest(unittest.TestCase):
     def test_gui_app_class_is_importable(self):
         self.assertEqual(SummerCampAgentApp.__name__, "SummerCampAgentApp")
+
+    def test_workbench_app_class_is_importable(self):
+        self.assertEqual(SummerCampWorkbenchApp.__name__, "SummerCampWorkbenchApp")
 
     def test_reply_message_contains_recommendation_and_answer(self):
         session = DesktopChatSession()
