@@ -37,6 +37,15 @@ class WorkbenchSourcesTest(unittest.TestCase):
             with self.assertRaisesRegex(ChatSourceError, "聊天记录文件不存在"):
                 JsonlChatSource(path).load_events()
 
+    def test_demo_chat_jsonl_is_loadable(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "workbench_demo_chat.jsonl"
+
+        events = JsonlChatSource(path).load_events()
+
+        self.assertGreaterEqual(len(events), 4)
+        self.assertTrue(any("报名入口" in event.content for event in events))
+        self.assertTrue(any(event.source == "demo_jsonl" for event in events))
+
 
 if __name__ == "__main__":
     unittest.main()
