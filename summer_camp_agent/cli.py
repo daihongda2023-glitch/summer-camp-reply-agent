@@ -8,9 +8,10 @@ from pathlib import Path
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
 from .knowledge import KnowledgeBase, KnowledgeValidationError
-from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
+from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, RagEmbeddingError
 from .rag_index import RagIndexError, build_rag_index, load_rag_index
 from .rag_retriever import RagRetriever
+from .rag_runtime import create_embedding_provider, load_optional_rag_retriever
 from .review import OperatorReview, ReviewCard, save_pending_question
 from .weflow_import import (
     WeFlowAuthError,
@@ -30,12 +31,18 @@ def main(argv: list[str] | None = None) -> int:
     ask_parser.add_argument("question", help="学生问题")
     ask_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     ask_parser.add_argument("--knowledge", help="知识库 JSON 路径")
+    ask_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
+    ask_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
+    ask_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     review_parser = subparsers.add_parser("review", help="生成运营半自动审核卡")
     review_parser.add_argument("question", help="学生问题")
     review_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     review_parser.add_argument("--knowledge", help="知识库 JSON 路径")
     review_parser.add_argument("--pending-log", help="当建议标记待补充时，写入 JSONL 待确认清单")
+    review_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
+    review_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
+    review_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     validate_parser = subparsers.add_parser("validate", help="校验知识库结构和自动回复安全字段")
     validate_parser.add_argument("knowledge", nargs="?", help="知识库 JSON 路径，默认使用 data/faq.json")
@@ -107,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 def _ask(args: argparse.Namespace) -> int:
     kb = _load_knowledge(args.knowledge)
     today = date.fromisoformat(args.today) if args.today else None
-    result = AnswerEngine(kb, today=today).answer(args.question)
+    result = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args)).answer(args.question)
     print(f"action: {result.action}")
     if result.intent:
         print(f"intent: {result.intent}")
@@ -131,7 +138,7 @@ def _validate(path: str | None) -> int:
 def _review(args: argparse.Namespace) -> int:
     kb = _load_knowledge(args.knowledge)
     today = date.fromisoformat(args.today) if args.today else None
-    engine = AnswerEngine(kb, today=today)
+    engine = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args))
     card = OperatorReview(engine).create_card(args.question)
     pending_saved = False
     if args.pending_log and card.recommendation == "mark_pending":
@@ -194,9 +201,15 @@ def _rag_search(args: argparse.Namespace) -> int:
 
 
 def _embedding_provider(args: argparse.Namespace):
-    if args.provider == "static":
-        return StaticEmbeddingProvider(default_embedding=[1.0, 0.0], model=args.model)
-    return OpenAIEmbeddingProvider.from_env(env_var=args.token_env, model=args.model)
+    return create_embedding_provider(provider_name=args.provider, model=args.model, token_env=args.token_env)
+
+
+def _optional_rag_retriever(args: argparse.Namespace):
+    return load_optional_rag_retriever(
+        index_path=args.rag_index,
+        provider_name=args.rag_provider,
+        token_env=args.rag_token_env,
+    )
 
 
 def _print_review_card(card: ReviewCard, pending_saved: bool) -> None:

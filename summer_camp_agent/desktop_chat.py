@@ -6,6 +6,7 @@ from pathlib import Path
 from .corrections import parse_correction_command, save_local_override
 from .engine import AnswerEngine
 from .knowledge import KnowledgeBase
+from .rag_runtime import DEFAULT_RAG_INDEX_PATH, load_optional_rag_retriever
 from .review import OperatorReview, ReviewCard, save_pending_question
 
 
@@ -26,10 +27,16 @@ class DesktopChatSession:
         pending_log_path: str | Path = DEFAULT_PENDING_LOG,
         override_path: str | Path = DEFAULT_OVERRIDE_PATH,
         enable_corrections: bool = True,
+        rag_index_path: str | Path = DEFAULT_RAG_INDEX_PATH,
+        rag_provider: str = "openai",
+        rag_token_env: str = "OPENAI_API_KEY",
     ):
         self.pending_log_path = Path(pending_log_path)
         self.override_path = Path(override_path)
         self.enable_corrections = enable_corrections
+        self.rag_index_path = Path(rag_index_path)
+        self.rag_provider = rag_provider
+        self.rag_token_env = rag_token_env
         self.review = self._build_review()
         self.last_card: ReviewCard | None = None
         self.last_user_question: str | None = None
@@ -78,7 +85,17 @@ class DesktopChatSession:
         )
 
     def _build_review(self) -> OperatorReview:
-        return OperatorReview(AnswerEngine(KnowledgeBase.from_default(override_path=self.override_path)))
+        rag_retriever = load_optional_rag_retriever(
+            index_path=self.rag_index_path,
+            provider_name=self.rag_provider,
+            token_env=self.rag_token_env,
+        )
+        return OperatorReview(
+            AnswerEngine(
+                KnowledgeBase.from_default(override_path=self.override_path),
+                rag_retriever=rag_retriever,
+            )
+        )
 
     @staticmethod
     def _system_message(original_question: str, recommendation: str, text: str) -> ChatMessage:

@@ -174,6 +174,55 @@ class CLITest(unittest.TestCase):
         self.assertIn("source: 线下手册", search_completed.stdout)
         self.assertIn("活动期间住宿由主办方统一安排", search_completed.stdout)
 
+    def test_ask_can_use_rag_index_when_faq_misses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = f"{directory}/documents"
+            index = f"{directory}/index"
+            os.makedirs(documents)
+            with open(f"{documents}/materials.md", "w", encoding="utf-8") as handle:
+                handle.write("# 物料通知\n\n## 营服\n\n营服颜色为蓝色。")
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "rag-index",
+                    "--documents",
+                    documents,
+                    "--index",
+                    index,
+                    "--provider",
+                    "static",
+                ],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "ask",
+                    "营服是什么颜色？",
+                    "--rag-index",
+                    index,
+                    "--rag-provider",
+                    "static",
+                ],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+            )
+
+        self.assertIn("action: auto_reply", completed.stdout)
+        self.assertIn("intent: rag.document", completed.stdout)
+        self.assertIn("source: 物料通知", completed.stdout)
+        self.assertIn("营服颜色为蓝色", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

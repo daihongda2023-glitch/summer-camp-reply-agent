@@ -3,11 +3,22 @@ from datetime import date
 
 from summer_camp_agent.engine import AnswerEngine
 from summer_camp_agent.knowledge import KnowledgeBase
+from summer_camp_agent.rag_retriever import RagSearchResult
 
 
-def make_engine(today=date(2026, 6, 20)):
+class FakeRagRetriever:
+    def __init__(self, result):
+        self.result = result
+        self.questions = []
+
+    def retrieve(self, question):
+        self.questions.append(question)
+        return self.result
+
+
+def make_engine(today=date(2026, 6, 20), rag_retriever=None):
     kb = KnowledgeBase.from_default()
-    return AnswerEngine(kb, today=today)
+    return AnswerEngine(kb, today=today, rag_retriever=rag_retriever)
 
 
 class AnswerEngineTest(unittest.TestCase):
@@ -42,6 +53,48 @@ class AnswerEngineTest(unittest.TestCase):
 
     def test_expired_auto_reply_is_not_sent(self):
         result = make_engine(today=date(2026, 7, 16)).answer("报名入口在哪里？")
+
+        self.assertEqual(result.action, "needs_info")
+        self.assertIn("当前资料还没有明确说明", result.reply)
+
+    def test_uses_rag_when_faq_does_not_match(self):
+        rag_result = RagSearchResult(
+            reply="同学你好，营服颜色以后续官方通知为准。",
+            source="线下手册 / 物料安排",
+            confidence=0.91,
+            chunks=[],
+            is_strong=True,
+        )
+        rag = FakeRagRetriever(rag_result)
+
+        result = make_engine(rag_retriever=rag).answer("营服是什么颜色？")
+
+        self.assertEqual(result.action, "auto_reply")
+        self.assertEqual(result.intent, "rag.document")
+        self.assertEqual(result.reply, rag_result.reply)
+        self.assertEqual(result.source, "线下手册 / 物料安排")
+        self.assertEqual(result.confidence, 0.91)
+        self.assertEqual(rag.questions, ["营服是什么颜色？"])
+
+    def test_does_not_call_rag_when_faq_has_confident_answer(self):
+        rag_result = RagSearchResult(
+            reply="错误的 RAG 回复",
+            source="线下手册",
+            confidence=0.99,
+            chunks=[],
+            is_strong=True,
+        )
+        rag = FakeRagRetriever(rag_result)
+
+        result = make_engine(rag_retriever=rag).answer("报名入口在哪里？")
+
+        self.assertEqual(result.action, "auto_reply")
+        self.assertEqual(result.intent, "registration.link")
+        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", result.reply)
+        self.assertEqual(rag.questions, [])
+
+    def test_returns_needs_info_when_rag_misses(self):
+        result = make_engine(rag_retriever=FakeRagRetriever(None)).answer("营服是什么颜色？")
 
         self.assertEqual(result.action, "needs_info")
         self.assertIn("当前资料还没有明确说明", result.reply)

@@ -17,9 +17,10 @@ class AnswerResult:
 
 
 class AnswerEngine:
-    def __init__(self, knowledge_base: KnowledgeBase, today: date | None = None):
+    def __init__(self, knowledge_base: KnowledgeBase, today: date | None = None, rag_retriever=None):
         self.knowledge_base = knowledge_base
         self.today = today or date.today()
+        self.rag_retriever = rag_retriever
 
     def answer(self, text: str) -> AnswerResult:
         fallback = self._human_fallback(text)
@@ -28,6 +29,15 @@ class AnswerEngine:
 
         item, confidence = self._retrieve(text)
         if item is None or confidence < 0.55 or not item.auto_reply or not item.is_valid_on(self.today):
+            rag_result = self._retrieve_from_rag(text)
+            if rag_result is not None:
+                return AnswerResult(
+                    action="auto_reply" if rag_result.is_strong else "suggested_reply",
+                    intent="rag.document",
+                    reply=rag_result.reply,
+                    source=rag_result.source,
+                    confidence=rag_result.confidence,
+                )
             return self._needs_info()
 
         return AnswerResult(
@@ -37,6 +47,11 @@ class AnswerEngine:
             source=f"{item.source}（{item.source_date}，最后更新 {item.last_updated}）",
             confidence=confidence,
         )
+
+    def _retrieve_from_rag(self, text: str):
+        if self.rag_retriever is None:
+            return None
+        return self.rag_retriever.retrieve(text)
 
     def _retrieve(self, text: str) -> tuple[FAQItem | None, float]:
         normalized = self._normalize(text)

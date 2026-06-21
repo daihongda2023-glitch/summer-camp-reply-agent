@@ -4,6 +4,8 @@ from pathlib import Path
 
 from summer_camp_agent.desktop_chat import DesktopChatSession
 from summer_camp_agent.gui import SummerCampAgentApp
+from summer_camp_agent.rag_embeddings import DEFAULT_EMBEDDING_MODEL, StaticEmbeddingProvider
+from summer_camp_agent.rag_index import build_rag_index
 
 
 class DesktopChatSessionTest(unittest.TestCase):
@@ -36,6 +38,32 @@ class DesktopChatSessionTest(unittest.TestCase):
         session.ask("报名入口在哪里？")
 
         self.assertFalse(session.save_last_pending())
+
+    def test_session_can_use_rag_index_for_unknown_question(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            documents = root / "documents"
+            index = root / "index"
+            documents.mkdir()
+            (documents / "materials.md").write_text("# 物料通知\n\n## 营服\n\n营服颜色为蓝色。", encoding="utf-8")
+            build_rag_index(
+                documents,
+                index,
+                StaticEmbeddingProvider(default_embedding=[1.0, 0.0], model=DEFAULT_EMBEDDING_MODEL),
+            )
+            session = DesktopChatSession(
+                pending_log_path=root / "pending.jsonl",
+                override_path=root / "local_overrides.json",
+                rag_index_path=index,
+                rag_provider="static",
+            )
+
+            message = session.ask("营服是什么颜色？")
+
+        self.assertEqual(message.recommendation, "send")
+        self.assertIn("处理类型：auto_reply", message.display_text)
+        self.assertIn("营服颜色为蓝色", message.display_text)
+        self.assertIn("来源：物料通知", message.display_text)
 
 
 if __name__ == "__main__":
