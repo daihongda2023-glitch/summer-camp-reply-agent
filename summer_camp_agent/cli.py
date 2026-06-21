@@ -8,6 +8,9 @@ from pathlib import Path
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
 from .knowledge import KnowledgeBase, KnowledgeValidationError
+from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
+from .rag_index import RagIndexError, build_rag_index, load_rag_index
+from .rag_retriever import RagRetriever
 from .review import OperatorReview, ReviewCard, save_pending_question
 from .weflow_import import (
     WeFlowAuthError,
@@ -49,6 +52,21 @@ def main(argv: list[str] | None = None) -> int:
     import_weflow_parser.add_argument("--token-env", default="WEFLOW_API_TOKEN", help="保存 WeFlow Token 的环境变量名")
     import_weflow_parser.add_argument("--include-media", action="store_true", help="保留纯媒体占位消息，不下载媒体文件")
 
+    rag_index_parser = subparsers.add_parser("rag-index", help="为正式资料生成本地 Embedding RAG 索引")
+    rag_index_parser.add_argument("--documents", default="data/rag/documents", help="正式资料目录")
+    rag_index_parser.add_argument("--index", default="data/rag/index", help="RAG 索引输出目录")
+    rag_index_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="Embedding 模型")
+    rag_index_parser.add_argument("--provider", choices=["openai", "static"], default="openai", help="Embedding provider，static 仅用于本地测试")
+    rag_index_parser.add_argument("--token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
+
+    rag_search_parser = subparsers.add_parser("rag-search", help="调试本地 RAG 索引的语义检索结果")
+    rag_search_parser.add_argument("question", help="要检索的问题")
+    rag_search_parser.add_argument("--index", default="data/rag/index", help="RAG 索引目录")
+    rag_search_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="Embedding 模型")
+    rag_search_parser.add_argument("--provider", choices=["openai", "static"], default="openai", help="Embedding provider，static 仅用于本地测试")
+    rag_search_parser.add_argument("--token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
+    rag_search_parser.add_argument("--top-k", type=int, default=4, help="返回的候选片段数量")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "ask":
@@ -59,9 +77,19 @@ def main(argv: list[str] | None = None) -> int:
             return _validate(args.knowledge)
         if args.command == "import-weflow":
             return _import_weflow(args)
+        if args.command == "rag-index":
+            return _rag_index(args)
+        if args.command == "rag-search":
+            return _rag_search(args)
     except KnowledgeValidationError as exc:
         print(f"知识库校验失败: {exc}", file=sys.stderr)
         return 1
+    except RagEmbeddingError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except RagIndexError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except WeFlowSessionSelectionRequired as exc:
         print(str(exc), file=sys.stderr)
         for index, session in enumerate(exc.sessions, start=1):
@@ -135,6 +163,40 @@ def _import_weflow(args: argparse.Namespace) -> int:
     print(f"skipped_count: {summary.skipped_count}")
     print(f"output: {summary.output_path}")
     return 0
+
+
+def _rag_index(args: argparse.Namespace) -> int:
+    provider = _embedding_provider(args)
+    summary = build_rag_index(Path(args.documents), Path(args.index), provider)
+    print(f"documents: {args.documents}")
+    print(f"index: {summary.index_path}")
+    print(f"chunk_count: {summary.chunk_count}")
+    print(f"model: {provider.model}")
+    return 0
+
+
+def _rag_search(args: argparse.Namespace) -> int:
+    provider = _embedding_provider(args)
+    rag_index = load_rag_index(Path(args.index), expected_model=provider.model)
+    retriever = RagRetriever(rag_index, provider, top_k=args.top_k)
+    result = retriever.retrieve(args.question)
+    if result is None:
+        print("未命中可信资料片段。")
+        return 0
+    print(f"score: {result.confidence:.2f}")
+    print(f"source: {result.source}")
+    print("reply:")
+    print(result.reply)
+    print("chunks:")
+    for index, scored in enumerate(result.chunks, start=1):
+        print(f"{index}. score={scored.score:.2f} source={scored.chunk.source_title} heading={scored.chunk.heading}")
+    return 0
+
+
+def _embedding_provider(args: argparse.Namespace):
+    if args.provider == "static":
+        return StaticEmbeddingProvider(default_embedding=[1.0, 0.0], model=args.model)
+    return OpenAIEmbeddingProvider.from_env(env_var=args.token_env, model=args.model)
 
 
 def _print_review_card(card: ReviewCard, pending_saved: bool) -> None:

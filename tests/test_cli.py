@@ -96,6 +96,84 @@ class CLITest(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("缺少 WEFLOW_API_TOKEN", completed.stderr)
 
+    def test_rag_index_requires_openai_api_key_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = f"{directory}/documents"
+            os.makedirs(documents)
+            with open(f"{documents}/notice.md", "w", encoding="utf-8") as handle:
+                handle.write("# 通知\n\n报名截止到 2026 年 7 月 15 日。")
+            env = dict(os.environ)
+            env.pop("OPENAI_API_KEY", None)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "rag-index",
+                    "--documents",
+                    documents,
+                    "--index",
+                    f"{directory}/index",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                env=env,
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("缺少 OPENAI_API_KEY", completed.stderr)
+
+    def test_rag_index_and_search_can_use_static_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = f"{directory}/documents"
+            index = f"{directory}/index"
+            os.makedirs(documents)
+            with open(f"{documents}/handbook.md", "w", encoding="utf-8") as handle:
+                handle.write("# 线下手册\n\n## 住宿安排\n\n活动期间住宿由主办方统一安排。")
+
+            index_completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "rag-index",
+                    "--documents",
+                    documents,
+                    "--index",
+                    index,
+                    "--provider",
+                    "static",
+                ],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+            )
+            search_completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "rag-search",
+                    "住宿怎么安排？",
+                    "--index",
+                    index,
+                    "--provider",
+                    "static",
+                ],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+            )
+
+        self.assertIn("chunk_count: 1", index_completed.stdout)
+        self.assertIn("score:", search_completed.stdout)
+        self.assertIn("source: 线下手册", search_completed.stdout)
+        self.assertIn("活动期间住宿由主办方统一安排", search_completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
