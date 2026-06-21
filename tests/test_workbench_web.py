@@ -17,6 +17,13 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("grid-template-rows: minmax(92px, 1fr) auto;", WORKBENCH_HTML)
         self.assertIn("flex-wrap: wrap;", WORKBENCH_HTML)
         self.assertIn("justify-content: flex-end;", WORKBENCH_HTML)
+        self.assertIn('id="wechatDebugConfig"', WORKBENCH_HTML)
+        self.assertIn('id="wechatSessionId"', WORKBENCH_HTML)
+        self.assertIn("let currentWechatConfig", WORKBENCH_HTML)
+        self.assertIn("loadWechatConfig()", WORKBENCH_HTML)
+        self.assertIn("applyWechatConfig", WORKBENCH_HTML)
+        self.assertIn("show_debug_config", WORKBENCH_HTML)
+        self.assertNotIn("session_id: ''", WORKBENCH_HTML)
 
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,6 +96,115 @@ class FakePasteAdapter:
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
+    def test_start_listener_uses_saved_wechat_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "wechat_bridge_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "base_url": "http://127.0.0.1:5031",
+                        "token_env": "WEFLOW_API_TOKEN",
+                        "group_name": "测试群",
+                        "session_id": "",
+                        "keywords": ["报名"],
+                        "poll_interval_seconds": 5,
+                        "enabled": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            state = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+
+            payload = state.start_wechat_listener()
+
+        self.assertEqual(payload["listener_state"]["group_name"], "测试群")
+
+    def test_get_wechat_config_returns_saved_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "wechat_bridge_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "base_url": "http://127.0.0.1:5031",
+                        "token_env": "WEFLOW_API_TOKEN",
+                        "group_name": "test group",
+                        "session_id": "room@chatroom",
+                        "keywords": ["signup"],
+                        "poll_interval_seconds": 7,
+                        "enabled": True,
+                        "show_debug_config": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            state = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+
+            payload = state.get_wechat_config()
+
+        self.assertEqual(payload["config"]["session_id"], "room@chatroom")
+        self.assertEqual(payload["config"]["keywords"], ["signup"])
+        self.assertTrue(payload["config"]["show_debug_config"])
+
+    def test_wechat_config_get_route_returns_current_config(self):
+        from http.server import ThreadingHTTPServer
+        import threading
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "wechat_bridge_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "base_url": "http://127.0.0.1:5031",
+                        "token_env": "WEFLOW_API_TOKEN",
+                        "group_name": "test group",
+                        "session_id": "room@chatroom",
+                        "keywords": ["signup"],
+                        "poll_interval_seconds": 7,
+                        "enabled": True,
+                        "show_debug_config": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            state = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                payload = json.loads(
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{server.server_address[1]}/api/wechat/config",
+                        timeout=5,
+                    )
+                    .read()
+                    .decode("utf-8")
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(payload["config"]["session_id"], "room@chatroom")
+        self.assertTrue(payload["config"]["show_debug_config"])
+
     def test_poll_wechat_once_adds_listener_events_to_items(self):
         from summer_camp_agent.workbench_models import ChatEvent
 

@@ -25,11 +25,13 @@ class WorkbenchWebState:
         candidate_path: str | Path = DEFAULT_CANDIDATE_PATH,
         log_path: str | Path = DEFAULT_LOG_PATH,
         group_config: GroupConfig | None = None,
+        wechat_config_path: str | Path | None = None,
     ):
         self.group_config = group_config or GroupConfig(group_name="夏令营咨询群", mode="semi_auto")
         self.session = WorkbenchSession(self.group_config, candidate_path=candidate_path, log_path=log_path)
         self.items: list[WorkbenchItem] = []
-        self.wechat_config = WeChatBridgeConfig()
+        self.wechat_config_store = WeChatBridgeConfigStore(wechat_config_path) if wechat_config_path else WeChatBridgeConfigStore()
+        self.wechat_config = self.wechat_config_store.load()
         self.wechat_listener = None
         self.wechat_listener_running = False
         self.paste_adapter = AssistedPasteAdapter()
@@ -77,8 +79,11 @@ class WorkbenchWebState:
 
     def configure_wechat(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.wechat_config = WeChatBridgeConfig.from_dict(payload)
-        WeChatBridgeConfigStore().save(self.wechat_config)
+        self.wechat_config_store.save(self.wechat_config)
         return {"status": "ok", "message": "配置已保存", "config": self.wechat_config.to_dict()}
+
+    def get_wechat_config(self) -> dict[str, Any]:
+        return {"config": self.wechat_config.to_dict()}
 
     def start_wechat_listener(self) -> dict[str, Any]:
         self.wechat_listener = WeFlowLiveListener(self.wechat_config)
@@ -164,6 +169,9 @@ def create_handler(state: WorkbenchWebState):
                 return
             if path == "/api/items":
                 self._send_json(state.list_items())
+                return
+            if path == "/api/wechat/config":
+                self._send_json(state.get_wechat_config())
                 return
             self._send_json({"error": "未找到接口"}, status=404)
 
@@ -355,6 +363,9 @@ WORKBENCH_HTML = r"""<!doctype html>
       padding-top: 12px;
       border-top: 1px solid var(--line);
     }
+    .bridge[hidden] {
+      display: none;
+    }
     .bridge label {
       color: var(--muted);
       font-size: 12px;
@@ -526,9 +537,11 @@ WORKBENCH_HTML = r"""<!doctype html>
       <div class="group active">夏令营咨询群<small>监听演示中</small></div>
       <div class="group">入营通知群<small>待接入</small></div>
       <div class="group">技术答疑群<small>待接入</small></div>
-      <div class="bridge">
+      <div id="wechatDebugConfig" class="bridge" hidden>
         <label for="wechatGroupName">群聊名称</label>
         <input id="wechatGroupName" value="沐曦开源英才夏令营咨询群">
+        <label for="wechatSessionId">Session ID</label>
+        <input id="wechatSessionId" value="" placeholder="可选：直接指定 WeFlow session_id">
         <label for="wechatKeywords">关键词</label>
         <input id="wechatKeywords" value="报名,报到,住宿,交通,作业,面试,GPU,算子">
         <label for="wechatPollSeconds">轮询间隔</label>
@@ -571,6 +584,16 @@ WORKBENCH_HTML = r"""<!doctype html>
     let items = [];
     let selectedId = null;
     let wechatPollTimer = null;
+    let currentWechatConfig = {
+      base_url: 'http://127.0.0.1:5031',
+      token_env: 'WEFLOW_API_TOKEN',
+      group_name: '',
+      session_id: null,
+      keywords: [],
+      poll_interval_seconds: 5,
+      enabled: true,
+      show_debug_config: false
+    };
 
     async function requestJson(path, body) {
       const options = body === undefined ? {} : {
@@ -588,20 +611,38 @@ WORKBENCH_HTML = r"""<!doctype html>
       document.getElementById('statusbar').textContent = text;
     }
 
+    function applyWechatConfig(config) {
+      currentWechatConfig = {...currentWechatConfig, ...(config || {})};
+      const debugConfig = document.getElementById('wechatDebugConfig');
+      debugConfig.hidden = !currentWechatConfig.show_debug_config;
+      document.getElementById('wechatGroupName').value = currentWechatConfig.group_name || '';
+      document.getElementById('wechatSessionId').value = currentWechatConfig.session_id || '';
+      document.getElementById('wechatKeywords').value = (currentWechatConfig.keywords || []).join(',');
+      document.getElementById('wechatPollSeconds').value = currentWechatConfig.poll_interval_seconds || 5;
+    }
+
+    async function loadWechatConfig() {
+      const data = await requestJson('/api/wechat/config');
+      applyWechatConfig(data.config);
+      return data.config;
+    }
+
     function readWechatConfig() {
-      return {
-        base_url: 'http://127.0.0.1:5031',
-        token_env: 'WEFLOW_API_TOKEN',
-        group_name: document.getElementById('wechatGroupName').value.trim(),
-        session_id: '',
-        keywords: document.getElementById('wechatKeywords').value.split(',').map(x => x.trim()).filter(Boolean),
-        poll_interval_seconds: Number(document.getElementById('wechatPollSeconds').value || 5),
-        enabled: true
-      };
+      const config = {...currentWechatConfig};
+      if (config.show_debug_config) {
+        config.group_name = document.getElementById('wechatGroupName').value.trim();
+        config.session_id = document.getElementById('wechatSessionId').value.trim();
+        config.keywords = document.getElementById('wechatKeywords').value.split(',').map(x => x.trim()).filter(Boolean);
+        config.poll_interval_seconds = Number(document.getElementById('wechatPollSeconds').value || 5);
+      }
+      return config;
     }
 
     function normalizePollIntervalSeconds() {
-      const raw = Number(document.getElementById('wechatPollSeconds').value || 5);
+      const source = currentWechatConfig.show_debug_config
+        ? document.getElementById('wechatPollSeconds').value
+        : currentWechatConfig.poll_interval_seconds;
+      const raw = Number(source || 5);
       if (!Number.isFinite(raw)) return 5;
       return Math.max(2, Math.min(60, raw));
     }
@@ -708,6 +749,7 @@ WORKBENCH_HTML = r"""<!doctype html>
     async function saveWechatConfig() {
       try {
         const data = await requestJson('/api/wechat/config', readWechatConfig());
+        applyWechatConfig(data.config);
         setStatus(data.message);
         return data;
       } catch (error) {
@@ -845,7 +887,16 @@ WORKBENCH_HTML = r"""<!doctype html>
       setStatus('已复制回复内容。');
     }
 
-    window.addEventListener('DOMContentLoaded', loadDemo);
+    async function boot() {
+      try {
+        await loadWechatConfig();
+      } catch (error) {
+        setStatus(error.message);
+      }
+      await loadDemo();
+    }
+
+    window.addEventListener('DOMContentLoaded', boot);
     window.addEventListener('beforeunload', clearWechatPolling);
   </script>
 </body>
