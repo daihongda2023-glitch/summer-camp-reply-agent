@@ -71,20 +71,7 @@ class WorkbenchSession:
 
         now = datetime.now(timezone.utc).isoformat()
         if reply != item.review_card.reply.strip():
-            self.candidate_store.append(
-                ReplyCandidate(
-                    candidate_id=hash_identifier(f"{item.event.event_id}:{reply}"),
-                    group_name=item.event.group_name,
-                    original_question=item.event.content,
-                    agent_reply=item.review_card.reply,
-                    edited_reply=reply,
-                    source=item.review_card.source or "人工修改",
-                    confidence=item.review_card.confidence,
-                    candidate_type="faq",
-                    status="pending",
-                    created_at=now,
-                )
-            )
+            self._append_candidate(item, reply, now)
 
         operator_action = "edited_and_sent" if reply != item.review_card.reply.strip() else "sent"
         self.log_store.append(
@@ -100,5 +87,34 @@ class WorkbenchSession:
                 confidence=item.review_card.confidence,
                 operator_action=operator_action,
                 created_at=now,
+            )
+        )
+
+    def save_candidate(self, item: WorkbenchItem, edited_reply: str, candidate_type: str = "faq") -> bool:
+        reply = edited_reply.strip()
+        if not reply:
+            return False
+        self._append_candidate(item, reply, datetime.now(timezone.utc).isoformat(), candidate_type)
+        return True
+
+    def _append_candidate(
+        self,
+        item: WorkbenchItem,
+        reply: str,
+        created_at: str,
+        candidate_type: str = "faq",
+    ) -> None:
+        self.candidate_store.append(
+            ReplyCandidate(
+                candidate_id=hash_identifier(f"{item.event.event_id}:{reply}"),
+                group_name=item.event.group_name,
+                original_question=item.event.content,
+                agent_reply=item.review_card.reply,
+                edited_reply=reply,
+                source=item.review_card.source or "人工修改",
+                confidence=item.review_card.confidence,
+                candidate_type=candidate_type,
+                status="pending",
+                created_at=created_at,
             )
         )
