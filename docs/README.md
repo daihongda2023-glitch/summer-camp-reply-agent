@@ -30,8 +30,9 @@
 | `python -m summer_camp_agent.cli review "报名入口在哪里？"` | 生成运营半自动审核卡，展示建议动作、候选回复和资料来源 |
 | `python -m summer_camp_agent.cli review "营服是什么颜色？" --pending-log data/pending_questions.jsonl` | 对未覆盖问题生成审核卡，并写入待补充 JSONL 清单 |
 | `python -m summer_camp_agent.cli import-weflow --group "沐曦开源英才夏令营咨询群" --keywords "报名,报到,住宿,交通" --start 20260601 --end 20260630` | 从已启动的 WeFlow 本地 API 导入指定微信群聊天记录，输出脱敏 JSONL |
-| 双击 `启动夏令营Agent.cmd` | 打开本地桌面聊天窗口，直接输入问题验证效果 |
-| `python -B -m summer_camp_agent.gui` | 从命令行启动同一个桌面聊天窗口 |
+| 双击 `启动夏令营Agent.cmd` | 打开 PC 端群聊答疑运营工作台 |
+| `python -B -m summer_camp_agent.workbench_gui` | 从命令行启动 PC 端群聊答疑运营工作台 |
+| `python -B -m summer_camp_agent.gui` | 启动旧版单轮桌面问答窗口 |
 
 ## WeFlow 聊天记录导入
 
@@ -42,6 +43,19 @@ $env:WEFLOW_API_TOKEN="你的 WeFlow Token"
 ```
 
 本项目不会读取或解密微信数据库，只消费 WeFlow 本地 API 返回的数据。导出的聊天记录默认写入 `imports/chat_logs/`，该目录已被 `.gitignore` 忽略。聊天记录只用于说话风格蒸馏和高频问题发现，不能直接作为官方事实答案。
+
+## PC 端工作台 MVP 演示
+
+当前 MVP 可以直接看到完整半自动答疑闭环：
+
+1. 双击 `启动夏令营Agent.cmd`，默认进入 PC 端群聊答疑运营工作台。
+2. 工作台启动后会自动载入演示消息，覆盖“可答复”“转人工”“待补充”和“未触发”四类状态。
+3. 点击中间消息流中的任意消息，右侧会展示触发原因、建议动作、意图、来源、置信度和模式决策。
+4. 底部回复框会自动填入草稿；可以直接点“发送”，也可以修改后再点“发送”。
+5. 修改后发送会写入 `data/reply_candidates.jsonl` 和 `data/reply_logs.jsonl`；只点“保存候选”会写入候选库，但不会记录发送动作。
+6. 点击“导入 JSONL”可以选择 `examples/workbench_demo_chat.jsonl` 验证导入流程，也可以选择后续 WeFlow 导出的脱敏聊天记录。
+
+当前 MVP 不会真实向微信发送消息。“发送”只表示在本地工作台中记录运营动作，方便验证回复质量、候选库沉淀和日志链路。
 
 ## 桌面验证修正功能
 
