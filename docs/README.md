@@ -30,18 +30,14 @@
 | `python -m summer_camp_agent.cli review "报名入口在哪里？"` | 生成运营半自动审核卡，展示建议动作、候选回复和资料来源 |
 | `python -m summer_camp_agent.cli review "营服是什么颜色？" --pending-log data/pending_questions.jsonl` | 对未覆盖问题生成审核卡，并写入待补充 JSONL 清单 |
 | `python -m summer_camp_agent.cli import-weflow --group "沐曦开源英才夏令营咨询群" --keywords "报名,报到,住宿,交通" --start 20260601 --end 20260630` | 从已启动的 WeFlow 本地 API 导入指定微信群聊天记录，输出脱敏 JSONL |
-| 双击 `启动夏令营Agent.cmd` | 打开浏览器版 PC 端群聊答疑运营工作台 |
+| 双击 `启动夏令营Agent.cmd` | 一键后台启动 WeFlow 和浏览器版 PC 端群聊答疑运营工作台 |
 | `python -B -m summer_camp_agent.workbench_web` | 从命令行启动浏览器版 PC 端群聊答疑运营工作台 |
 | `python -B -m summer_camp_agent.workbench_gui` | 启动 Tkinter 版工作台；如果本机 Tcl/Tk 不完整，使用浏览器版 |
 | `python -B -m summer_camp_agent.gui` | 启动旧版单轮桌面问答窗口 |
 
 ## WeFlow 聊天记录导入
 
-导入前需要用户手动启动 WeFlow，在设置中开启 API 服务，并将 API Token 放入环境变量：
-
-```powershell
-$env:WEFLOW_API_TOKEN="你的 WeFlow Token"
-```
+双击 `启动夏令营Agent.cmd` 会自动补齐 WeFlow 本地 API 配置、启动 WeFlow 并等待 `http://127.0.0.1:5031/api/v1/health` 可访问。Token 优先读取 `WEFLOW_API_TOKEN` 环境变量；未设置时会读取 `%APPDATA%\weflow\WeFlow-config.json` 中的 `httpApiToken`。启动器不会把真实 Token 写入项目仓库或日志。
 
 本项目不会读取或解密微信数据库，只消费 WeFlow 本地 API 返回的数据。命令行导出的聊天记录默认写入 `imports/chat_logs/`，该目录已被 `.gitignore` 忽略；浏览器版工作台可以直接按群聊名称从 WeFlow 导入聊天记录，不需要上传 JSONL 文件。聊天记录只用于说话风格蒸馏和高频问题发现，不能直接作为官方事实答案。
 
@@ -49,27 +45,25 @@ $env:WEFLOW_API_TOKEN="你的 WeFlow Token"
 
 当前 MVP 可以直接看到完整半自动答疑闭环：
 
-1. 双击 `启动夏令营Agent.cmd`，默认启动本地服务并自动打开浏览器版 PC 端群聊答疑运营工作台。
+1. 双击 `启动夏令营Agent.cmd`，默认隐藏后台启动 WeFlow 和本地工作台服务，并自动打开浏览器版 PC 端群聊答疑运营工作台。
 2. 工作台启动后会自动载入演示消息，覆盖“可答复”“转人工”“待补充”和“未触发”四类状态。
 3. 点击中间消息流中的任意消息，右侧会展示触发原因、建议动作、意图、来源、置信度和模式决策。
 4. 底部回复框会自动填入草稿；可以修改后点击“填入微信”，也可以点击“记录发送”只记录本地演练动作。
 5. 修改后点击“记录发送”会写入 `data/reply_candidates.jsonl` 和 `data/reply_logs.jsonl`；只点“保存候选”会写入候选库，但不会记录发送动作。
 6. 在左侧填写群聊名称后点击“从 WeFlow 导入”，工作台会通过 WeFlow 本地 API 拉取该群聊的聊天记录并生成待处理消息。
 
-当前 MVP 不会后台向微信发送消息。“填入微信”只会把草稿粘贴到当前前台输入框，不会自动按回车或点击发送；“我已发送”只表示运营已经在微信中人工确认并手动发送。关闭启动脚本打开的命令行窗口即可停止本地工作台服务。
+当前 MVP 不会后台向微信发送消息。“填入微信”只会把草稿粘贴到当前前台输入框，不会自动按回车或点击发送；“我已发送”只表示运营已经在微信中人工确认并手动发送。启动脚本不会保留可见命令行窗口，关闭浏览器也不会停止后台服务；需要排障时查看 `data/agent_launcher.log`、`data/workbench-web.out`、`data/workbench-web.err`，以及 `D:\github\WeFlow\weflow-dev.out`、`D:\github\WeFlow\weflow-dev.err`。
 
 ## 微信半自动辅助交互
 
 工作台支持半自动接入普通微信群：
 
-1. 手动启动 WeFlow，并在 WeFlow 设置中开启本地 API。
-2. 在当前系统环境变量中设置 `WEFLOW_API_TOKEN`。
-3. 双击 `启动夏令营Agent.cmd` 打开工作台。
-4. 在左侧填写群聊名称，点击“保存监听配置”；如开启调试配置，也可以调整关键词和轮询间隔。
-5. 点击“开始监听”后，工作台会按轮询间隔自动拉取最近 1 小时内的新消息；也可以点击“拉取新消息”手动排查。
-6. 工作台生成草稿后，先把光标放到目标微信群输入框，再点击“填入微信”。
-7. 系统只会复制或粘贴，不会自动按回车或点击发送。
-8. 在微信中人工确认并手动发送后，回到工作台点击“我已发送”。
+1. 双击 `启动夏令营Agent.cmd` 打开工作台；启动器会自动配置并启动 WeFlow。
+2. 默认群聊名称为 `沐曦开源英才夏令营咨询群`，如需切换群聊，在左侧填写群聊名称后点击“保存监听配置”。
+3. 点击“开始监听”后，工作台会按轮询间隔自动拉取最近 1 小时内的新消息；也可以点击“拉取新消息”手动排查。
+4. 工作台生成草稿后，先把光标放到目标微信群输入框，再点击“填入微信”。
+5. 系统只会复制或粘贴，不会自动按回车或点击发送。
+6. 在微信中人工确认并手动发送后，回到工作台点击“我已发送”。
 
 该能力不会破解微信数据库，不注入微信客户端，不后台自动群发。若粘贴失败，工作台会降级为复制到剪贴板，请手动粘贴。
 

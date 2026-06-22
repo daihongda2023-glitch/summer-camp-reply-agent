@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from summer_camp_agent.weflow_import import (
@@ -12,6 +13,7 @@ from summer_camp_agent.weflow_import import (
     WeFlowImportError,
     WeFlowSessionSelectionRequired,
     import_weflow_chat,
+    resolve_weflow_token,
 )
 
 
@@ -44,6 +46,37 @@ class FakeUrlOpen:
 
 
 class WeFlowImportTest(unittest.TestCase):
+    def test_resolve_weflow_token_prefers_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(json.dumps({"httpApiToken": "config-token"}), encoding="utf-8")
+
+            with patch.dict("os.environ", {"WEFLOW_API_TOKEN": "env-token"}, clear=False):
+                token = resolve_weflow_token(config_path=config_path)
+
+        self.assertEqual(token, "env-token")
+
+    def test_resolve_weflow_token_falls_back_to_weflow_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(
+                json.dumps({"httpApiToken": "config-token", "keep": "value"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {}, clear=True):
+                token = resolve_weflow_token(config_path=config_path)
+
+        self.assertEqual(token, "config-token")
+
+    def test_resolve_weflow_token_reports_actionable_missing_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(json.dumps({"httpApiToken": ""}), encoding="utf-8")
+
+            with patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(WeFlowAuthError, "WeFlow 配置"):
+                resolve_weflow_token(config_path=config_path)
+
     def test_rejects_remote_base_url(self):
         with self.assertRaisesRegex(WeFlowImportError, "只允许连接本机"):
             WeFlowImportClient("https://example.com", "token")

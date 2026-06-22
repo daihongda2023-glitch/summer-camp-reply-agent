@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from summer_camp_agent.workbench_web import WORKBENCH_HTML, WorkbenchWebState, create_handler
+from summer_camp_agent.wechat_bridge_config import DEFAULT_GROUP_NAME
 from summer_camp_agent.weflow_import import WeFlowSession
 
 
@@ -25,6 +26,19 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("applyWechatConfig", WORKBENCH_HTML)
         self.assertIn("show_debug_config", WORKBENCH_HTML)
         self.assertNotIn("session_id: ''", WORKBENCH_HTML)
+
+    def test_default_wechat_config_uses_target_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+
+            payload = state.get_wechat_config()
+
+        self.assertEqual(payload["config"]["group_name"], DEFAULT_GROUP_NAME)
 
     def test_html_stops_wechat_polling_after_listener_error(self):
         self.assertIn("if (data.status === 'error')", WORKBENCH_HTML)

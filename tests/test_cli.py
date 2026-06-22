@@ -74,24 +74,29 @@ class CLITest(unittest.TestCase):
             self.assertIn("pending_saved: true", completed.stdout)
 
     def test_import_weflow_requires_token_environment_variable(self):
-        env = dict(os.environ)
-        env.pop("WEFLOW_API_TOKEN", None)
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-B",
-                "-m",
-                "summer_camp_agent.cli",
-                "import-weflow",
-                "--group",
-                "测试群",
-                "--keywords",
-                "报名,住宿",
-            ],
-            capture_output=True,
-            encoding="utf-8",
-            env=env,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            empty_config = os.path.join(directory, "WeFlow-config.json")
+            with open(empty_config, "w", encoding="utf-8") as handle:
+                handle.write('{"httpApiToken": ""}')
+            env = dict(os.environ)
+            env.pop("WEFLOW_API_TOKEN", None)
+            env["WEFLOW_CONFIG_PATH"] = empty_config
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "summer_camp_agent.cli",
+                    "import-weflow",
+                    "--group",
+                    "测试群",
+                    "--keywords",
+                    "报名,住宿",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                env=env,
+            )
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("缺少 WEFLOW_API_TOKEN", completed.stderr)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import os
 from typing import Any, Callable
 
 from .chat_log_sanitizer import AliasRegistry, build_sanitized_message
@@ -14,6 +13,7 @@ from .weflow_import import (
     WeFlowSession,
     WeFlowSessionNotFoundError,
     WeFlowSessionSelectionRequired,
+    resolve_weflow_token,
 )
 from .workbench_models import ChatEvent
 
@@ -44,9 +44,10 @@ class WeFlowLiveListener:
         self._session: WeFlowSession | None = None
 
     def poll_once(self) -> ListenerPollResult:
-        token_value = self.token if self.token is not None else os.environ.get(self.config.token_env, "")
-        if not token_value:
-            return ListenerPollResult("error", f"缺少 {self.config.token_env}，请先设置 WeFlow API Token 环境变量。", [])
+        try:
+            token_value = resolve_weflow_token(self.config.token_env, explicit_token=self.token)
+        except WeFlowAuthError as exc:
+            return ListenerPollResult("error", str(exc), [])
         try:
             client = self.client or WeFlowImportClient(self.config.base_url, token_value)
             session = self._resolve_session(client)

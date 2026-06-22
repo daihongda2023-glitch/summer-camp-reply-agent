@@ -86,6 +86,52 @@ class WeFlowFetchedMessages:
         return self.pulled_count - self.written_count
 
 
+def default_weflow_config_path() -> Path:
+    explicit_path = os.environ.get("WEFLOW_CONFIG_PATH", "").strip()
+    if explicit_path:
+        return Path(explicit_path)
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata) / "weflow" / "WeFlow-config.json"
+    return Path.home() / "AppData" / "Roaming" / "weflow" / "WeFlow-config.json"
+
+
+def resolve_weflow_token(
+    token_env: str = "WEFLOW_API_TOKEN",
+    *,
+    explicit_token: str | None = None,
+    config_path: str | Path | None = None,
+) -> str:
+    if explicit_token and explicit_token.strip():
+        return explicit_token.strip()
+
+    env_token = os.environ.get(token_env, "").strip()
+    if env_token:
+        return env_token
+
+    path = Path(config_path) if config_path is not None else default_weflow_config_path()
+    token_from_config = _read_weflow_config_token(path)
+    if token_from_config:
+        return token_from_config
+
+    raise WeFlowAuthError(
+        f"缺少 {token_env}，且未能从 WeFlow 配置读取 httpApiToken。"
+        "请先启动 WeFlow，本地 API 会由启动器自动启用；仍失败时请查看 WeFlow 配置。"
+    )
+
+
+def _read_weflow_config_token(path: Path) -> str:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ""
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WeFlowAuthError(f"WeFlow 配置读取失败：{path}。请重启 WeFlow 后再试。") from exc
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("httpApiToken") or "").strip()
+
+
 class WeFlowImportClient:
     def __init__(
         self,
@@ -240,9 +286,7 @@ def fetch_weflow_messages(
     client: WeFlowImportClient | None = None,
     token: str | None = None,
 ) -> WeFlowFetchedMessages:
-    token_value = token or os.environ.get(config.token_env, "")
-    if not token_value:
-        raise WeFlowAuthError(f"缺少 {config.token_env}，请先设置 WeFlow API Token 环境变量。")
+    token_value = resolve_weflow_token(config.token_env, explicit_token=token)
     active_client = client or WeFlowImportClient(config.base_url, token_value)
     session = _select_session(active_client, config)
     since = _date_to_timestamp(config.start)

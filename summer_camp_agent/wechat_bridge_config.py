@@ -12,6 +12,7 @@ from .chat_log_sanitizer import hash_identifier
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "wechat_bridge_config.json"
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[1] / "data" / "listener_state.json"
+DEFAULT_GROUP_NAME = "沐曦开源英才夏令营咨询群"
 
 
 class WeChatBridgeConfigError(ValueError):
@@ -22,7 +23,7 @@ class WeChatBridgeConfigError(ValueError):
 class WeChatBridgeConfig:
     base_url: str = "http://127.0.0.1:5031"
     token_env: str = "WEFLOW_API_TOKEN"
-    group_name: str = ""
+    group_name: str = DEFAULT_GROUP_NAME
     session_id: str = ""
     keywords: list[str] = field(default_factory=lambda: ["报名", "报到", "住宿", "交通", "作业", "面试", "GPU", "算子"])
     poll_interval_seconds: int = 5
@@ -34,7 +35,7 @@ class WeChatBridgeConfig:
         config = cls(
             base_url=str(raw.get("base_url") or "http://127.0.0.1:5031"),
             token_env=str(raw.get("token_env") or "WEFLOW_API_TOKEN"),
-            group_name=str(raw.get("group_name") or ""),
+            group_name=str(raw.get("group_name") or DEFAULT_GROUP_NAME),
             session_id=str(raw.get("session_id") or ""),
             keywords=[str(item).strip() for item in raw.get("keywords", []) if str(item).strip()],
             poll_interval_seconds=int(raw.get("poll_interval_seconds") or 5),

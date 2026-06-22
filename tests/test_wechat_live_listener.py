@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from summer_camp_agent.wechat_bridge_config import ListenerStateStore, WeChatBridgeConfig
 from summer_camp_agent.wechat_live_listener import WeFlowLiveListener
@@ -149,14 +153,18 @@ class WeFlowLiveListenerTest(unittest.TestCase):
         self.assertEqual(result.events[0].sender_alias, "成员001")
 
     def test_poll_once_reports_missing_token(self):
-        listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", token_env="MISSING_WEFLOW_TOKEN"),
-            state_store=MemoryStateStore(),
-            client=FakeClient(),
-            token="",
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(json.dumps({"httpApiToken": ""}), encoding="utf-8")
+            listener = WeFlowLiveListener(
+                WeChatBridgeConfig(group_name="测试群", token_env="MISSING_WEFLOW_TOKEN"),
+                state_store=MemoryStateStore(),
+                client=FakeClient(),
+                token="",
+            )
 
-        result = listener.poll_once()
+            with patch.dict("os.environ", {"WEFLOW_CONFIG_PATH": str(config_path)}, clear=True):
+                result = listener.poll_once()
 
         self.assertEqual(result.status, "error")
         self.assertIn("缺少 MISSING_WEFLOW_TOKEN", result.message)

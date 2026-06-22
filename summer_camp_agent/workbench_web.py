@@ -11,7 +11,7 @@ import webbrowser
 
 from .chat_log_sanitizer import hash_identifier
 from .wechat_assisted_paste import AssistedPasteAdapter
-from .wechat_bridge_config import WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
 from .weflow_import import WeFlowImportClient, WeFlowImportConfig, fetch_weflow_messages
 from .workbench_models import ChatEvent, GroupConfig
@@ -28,7 +28,7 @@ class WorkbenchWebState:
         group_config: GroupConfig | None = None,
         wechat_config_path: str | Path | None = None,
     ):
-        self.group_config = group_config or GroupConfig(group_name="夏令营咨询群", mode="semi_auto")
+        self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
         self.session = WorkbenchSession(self.group_config, candidate_path=candidate_path, log_path=log_path)
         self.items: list[WorkbenchItem] = []
         self.wechat_config_store = WeChatBridgeConfigStore(wechat_config_path) if wechat_config_path else WeChatBridgeConfigStore()
@@ -631,7 +631,7 @@ WORKBENCH_HTML = r"""<!doctype html>
     let currentWechatConfig = {
       base_url: 'http://127.0.0.1:5031',
       token_env: 'WEFLOW_API_TOKEN',
-      group_name: '',
+      group_name: '沐曦开源英才夏令营咨询群',
       session_id: null,
       keywords: [],
       poll_interval_seconds: 5,
@@ -659,7 +659,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       currentWechatConfig = {...currentWechatConfig, ...(config || {})};
       const debugConfig = document.getElementById('wechatDebugConfig');
       debugConfig.hidden = !currentWechatConfig.show_debug_config;
-      document.getElementById('wechatGroupName').value = currentWechatConfig.group_name || '';
+      document.getElementById('wechatGroupName').value = currentWechatConfig.group_name || '沐曦开源英才夏令营咨询群';
       document.getElementById('wechatSessionId').value = currentWechatConfig.session_id || '';
       document.getElementById('wechatKeywords').value = (currentWechatConfig.keywords || []).join(',');
       document.getElementById('wechatPollSeconds').value = currentWechatConfig.poll_interval_seconds || 5;

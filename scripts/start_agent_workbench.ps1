@@ -7,7 +7,14 @@ try {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
+
 $launchLog = Join-Path $repoRoot 'data\agent_launcher.log'
+$weflowRoot = 'D:\github\WeFlow'
+$weflowHealthUrl = 'http://127.0.0.1:5031/api/v1/health'
+$weflowOutLog = Join-Path $weflowRoot 'weflow-dev.out'
+$weflowErrLog = Join-Path $weflowRoot 'weflow-dev.err'
+$workbenchOutLog = Join-Path $repoRoot 'data\workbench-web.out'
+$workbenchErrLog = Join-Path $repoRoot 'data\workbench-web.err'
 
 function Get-WorkbenchProcessIdsFromCommandLine {
     $target = 'summer_camp_agent.workbench_web'
@@ -123,6 +130,168 @@ function Start-AgentTranscript {
     }
 }
 
+function Set-JsonProperty {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Object,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [object]$Value
+    )
+
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $Object.$Name = $Value
+        return
+    }
+    Add-Member -InputObject $Object -NotePropertyName $Name -NotePropertyValue $Value
+}
+
+function New-WeFlowApiToken {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Ensure-WeFlowConfig {
+    $configDir = Join-Path $env:APPDATA 'weflow'
+    $configPath = Join-Path $configDir 'WeFlow-config.json'
+    $backupPath = Join-Path $configDir 'WeFlow-config.agent-backup.json'
+
+    if (-not (Test-Path -LiteralPath $configDir)) {
+        New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    }
+
+    if (Test-Path -LiteralPath $configPath) {
+        Copy-Item -LiteralPath $configPath -Destination $backupPath -Force
+        try {
+            $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
+        } catch {
+            throw "WeFlow config file is not valid JSON: $configPath"
+        }
+        if ($null -eq $config) {
+            $config = [pscustomobject]@{}
+        }
+    } else {
+        $config = [pscustomobject]@{}
+    }
+
+    $token = [string]$config.httpApiToken
+    $generatedToken = $false
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        $token = New-WeFlowApiToken
+        $generatedToken = $true
+    }
+
+    Set-JsonProperty -Object $config -Name 'httpApiEnabled' -Value $true
+    Set-JsonProperty -Object $config -Name 'httpApiHost' -Value '127.0.0.1'
+    Set-JsonProperty -Object $config -Name 'httpApiPort' -Value 5031
+    Set-JsonProperty -Object $config -Name 'silentStartup' -Value $true
+    Set-JsonProperty -Object $config -Name 'windowCloseBehavior' -Value 'tray'
+    Set-JsonProperty -Object $config -Name 'httpApiToken' -Value $token
+
+    $json = $config | ConvertTo-Json -Depth 50
+    [System.IO.File]::WriteAllText($configPath, $json, [System.Text.Encoding]::UTF8)
+
+    if ($generatedToken) {
+        Write-Host '[Agent] WeFlow local API token generated and saved to the user config.'
+    } else {
+        Write-Host '[Agent] WeFlow local API token loaded from the user config.'
+    }
+    Write-Host "[Agent] WeFlow config prepared: $configPath"
+    return $token
+}
+
+function Test-WeFlowHealth {
+    try {
+        $response = Invoke-WebRequest -Uri $weflowHealthUrl -UseBasicParsing -TimeoutSec 2
+        return [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 300
+    } catch {
+        return $false
+    }
+}
+
+function Wait-WeFlowHealth {
+    param(
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-WeFlowHealth) {
+            Write-Host "[Agent] WeFlow health is ready: $weflowHealthUrl"
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+function Start-WeFlowHidden {
+    if (Test-WeFlowHealth) {
+        Write-Host "[Agent] WeFlow health already available: $weflowHealthUrl"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $weflowRoot)) {
+        throw "WeFlow root was not found: $weflowRoot"
+    }
+
+    New-Item -ItemType Directory -Force -Path $weflowRoot | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $weflowRoot 'node_modules'))) {
+        Write-Host '[Agent] WeFlow dependencies are missing. Running npm install in hidden mode...'
+        $install = Start-Process -FilePath 'npm.cmd' `
+            -ArgumentList @('install') `
+            -WorkingDirectory $weflowRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $weflowOutLog `
+            -RedirectStandardError $weflowErrLog `
+            -PassThru `
+            -Wait
+        if ($install.ExitCode -ne 0) {
+            throw "WeFlow npm install failed. See logs: $weflowOutLog / $weflowErrLog"
+        }
+    }
+
+    Write-Host "[Agent] Starting WeFlow hidden. Logs: $weflowOutLog / $weflowErrLog"
+    Start-Process -FilePath 'cmd.exe' `
+        -ArgumentList @('/d', '/s', '/c', 'npm.cmd run electron:dev') `
+        -WorkingDirectory $weflowRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $weflowOutLog `
+        -RedirectStandardError $weflowErrLog | Out-Null
+
+    if (-not (Wait-WeFlowHealth -TimeoutSeconds 30)) {
+        throw "WeFlow health check timed out: $weflowHealthUrl. See logs: $weflowOutLog / $weflowErrLog"
+    }
+}
+
+function Resolve-PythonExe {
+    $pythonCandidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'),
+        (Join-Path $env:ProgramFiles 'Python312\python.exe'),
+        (Join-Path $env:ProgramFiles 'Python311\python.exe')
+    )
+
+    $pythonExe = $pythonCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $pythonExe) {
+        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCommand) {
+            $pythonExe = $pythonCommand.Source
+        }
+    }
+
+    if (-not $pythonExe -or -not (Test-Path -LiteralPath $pythonExe)) {
+        throw 'Python 3.10 or later was not found.'
+    }
+    return $pythonExe
+}
+
 function Confirm-WorkbenchCodeVersion {
     param(
         [Parameter(Mandatory = $true)]
@@ -161,54 +330,50 @@ print('decision_mapping=' + ('ok' if 'formatDecisionValue' in workbench_web.WORK
     }
 }
 
-$stoppedProcessIds = @(Stop-PreviousWorkbenchProcesses)
-Start-AgentTranscript -LogPath $launchLog | Out-Null
-foreach ($processId in $stoppedProcessIds) {
-    Write-Host "[Agent] Confirmed stopped previous workbench process before launch: $processId"
+function Start-AgentWorkbench {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PythonExe
+    )
+
+    Write-Host "[Agent] Starting summer camp Agent workbench hidden. Logs: $workbenchOutLog / $workbenchErrLog"
+    $process = Start-Process -FilePath $PythonExe `
+        -ArgumentList @('-B', '-m', 'summer_camp_agent.workbench_web') `
+        -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $workbenchOutLog `
+        -RedirectStandardError $workbenchErrLog `
+        -PassThru
+    Write-Host "[Agent] Workbench process started: $($process.Id)"
 }
 
-$weflowConfigPath = Join-Path $env:APPDATA 'weflow\WeFlow-config.json'
-if (-not (Test-Path -LiteralPath $weflowConfigPath)) {
-    throw "WeFlow config file not found: $weflowConfigPath. Please start WeFlow and enable the local API first."
-}
-
+$transcriptStarted = $false
 try {
-    $weflowConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath $weflowConfigPath | ConvertFrom-Json
-} catch {
-    throw "WeFlow config file is not valid JSON. Please restart WeFlow or save the API settings again."
-}
-
-$token = [string]$weflowConfig.httpApiToken
-if ([string]::IsNullOrWhiteSpace($token)) {
-    throw "WeFlow API token is missing. Please enable the local API in WeFlow settings."
-}
-$env:WEFLOW_API_TOKEN = $token
-
-$pythonCandidates = @(
-    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),
-    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'),
-    (Join-Path $env:ProgramFiles 'Python312\python.exe'),
-    (Join-Path $env:ProgramFiles 'Python311\python.exe')
-)
-
-$pythonExe = $pythonCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if (-not $pythonExe) {
-    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    if ($pythonCommand) {
-        $pythonExe = $pythonCommand.Source
+    $stoppedProcessIds = @(Stop-PreviousWorkbenchProcesses)
+    $transcriptStarted = Start-AgentTranscript -LogPath $launchLog
+    foreach ($processId in $stoppedProcessIds) {
+        Write-Host "[Agent] Confirmed stopped previous workbench process before launch: $processId"
     }
-}
 
-if (-not $pythonExe -or -not (Test-Path -LiteralPath $pythonExe)) {
-    throw "Python 3.10 or later was not found."
-}
+    $token = Ensure-WeFlowConfig
+    $env:WEFLOW_API_TOKEN = $token
+    $env:WEFLOW_CONFIG_PATH = Join-Path (Join-Path $env:APPDATA 'weflow') 'WeFlow-config.json'
 
-Write-Host '[Agent] WeFlow API token loaded from config.'
-Write-Host "[Agent] Python: $pythonExe"
-Confirm-WorkbenchCodeVersion -PythonExe $pythonExe -RepoRoot $repoRoot
-Write-Host '[Agent] Starting summer camp Agent workbench...'
+    Start-WeFlowHidden
 
-& $pythonExe -B -m summer_camp_agent.workbench_web
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    $pythonExe = Resolve-PythonExe
+    Write-Host "[Agent] Python: $pythonExe"
+    Confirm-WorkbenchCodeVersion -PythonExe $pythonExe -RepoRoot $repoRoot
+    Start-AgentWorkbench -PythonExe $pythonExe
+    Write-Host '[Agent] Launcher completed. Background services will keep running.'
+} catch {
+    Write-Host "[Agent] Launcher failed: $($_.Exception.Message)"
+    exit 1
+} finally {
+    if ($transcriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        } catch {
+        }
+    }
 }

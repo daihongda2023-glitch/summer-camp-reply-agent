@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from summer_camp_agent.wechat_bridge_config import (
+    DEFAULT_GROUP_NAME,
     ListenerState,
     ListenerStateStore,
     WeChatBridgeConfig,
@@ -13,6 +14,10 @@ from summer_camp_agent.wechat_bridge_config import (
 
 
 class WeChatBridgeConfigTest(unittest.TestCase):
+    def test_default_config_uses_target_weflow_group(self):
+        self.assertEqual(WeChatBridgeConfig().group_name, DEFAULT_GROUP_NAME)
+        self.assertEqual(WeChatBridgeConfig.from_dict({}).group_name, DEFAULT_GROUP_NAME)
+
     def test_config_from_dict_rejects_remote_base_url(self):
         with self.assertRaisesRegex(WeChatBridgeConfigError, "只允许连接本机"):
             WeChatBridgeConfig.from_dict({"base_url": "https://example.com", "group_name": "测试群"})
