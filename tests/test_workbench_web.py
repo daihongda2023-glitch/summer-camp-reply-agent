@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from summer_camp_agent.workbench_web import WORKBENCH_HTML, WorkbenchWebState, create_handler
+from summer_camp_agent.weflow_import import WeFlowSession
 
 
 class WorkbenchWebTest(unittest.TestCase):
@@ -34,6 +35,13 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("overflow: auto;", WORKBENCH_HTML)
         self.assertIn(".reply {\n      grid-column: 2 / 4;", WORKBENCH_HTML)
         self.assertIn(".statusbar {\n      grid-column: 2 / 4;", WORKBENCH_HTML)
+
+    def test_html_prefers_weflow_group_import_over_jsonl_upload(self):
+        self.assertIn("importWeFlowGroup()", WORKBENCH_HTML)
+        self.assertIn("/api/import-weflow", WORKBENCH_HTML)
+        self.assertIn("从 WeFlow 导入", WORKBENCH_HTML)
+        self.assertNotIn("导入 JSONL", WORKBENCH_HTML)
+        self.assertNotIn('id="jsonlFile"', WORKBENCH_HTML)
 
     def test_html_maps_decision_panel_machine_values_to_chinese(self):
         self.assertIn("formatDecisionValue", WORKBENCH_HTML)
@@ -93,6 +101,20 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertEqual(payload["items"][0]["event_id"], "sha256:msg")
         self.assertEqual(payload["items"][0]["source"], "browser_upload")
 
+    def test_import_weflow_group_processes_messages_from_named_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            client = FakeWeFlowImportClient()
+
+            payload = state.import_weflow_group("测试群", client=client, token="fake-token")
+
+        self.assertEqual(client.search_calls, ["测试群"])
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["items"][0]["group_name"], "测试群")
+        self.assertEqual(payload["items"][0]["question"], "报名入口在哪里？")
+        self.assertEqual(payload["items"][0]["source"], "weflow_api")
+
 
 class FakeListener:
     def __init__(self, events):
@@ -104,6 +126,37 @@ class FakeListener:
 
         self.poll_count += 1
         return ListenerPollResult("ok", "ok", self.events)
+
+
+class FakeWeFlowImportClient:
+    def __init__(self):
+        self.search_calls = []
+
+    def search_sessions(self, keyword):
+        self.search_calls.append(keyword)
+        return [WeFlowSession(id="room@chatroom", name="测试群", type="group")]
+
+    def pull_messages(self, session_id, *, since, end, limit, offset):
+        return {
+            "meta": {"groupId": session_id},
+            "messages": [
+                {
+                    "sender": "wxid_a",
+                    "timestamp": 1781911260,
+                    "type": 0,
+                    "content": "报名入口在哪里？",
+                    "platformMessageId": "msg-1",
+                },
+                {
+                    "sender": "wxid_b",
+                    "timestamp": 1781911320,
+                    "type": 0,
+                    "content": "收到，谢谢老师",
+                    "platformMessageId": "msg-2",
+                },
+            ],
+            "sync": {"hasMore": False},
+        }
 
 
 class FakePasteAdapter:

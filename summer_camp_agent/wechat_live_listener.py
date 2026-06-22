@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
-from typing import Any
+from typing import Any, Callable
 
 from .chat_log_sanitizer import AliasRegistry, build_sanitized_message
 from .wechat_bridge_config import ListenerStateStore, WeChatBridgeConfig
@@ -33,11 +33,13 @@ class WeFlowLiveListener:
         state_store: ListenerStateStore | None = None,
         client: Any | None = None,
         token: str | None = None,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.config = config
         self.state_store = state_store or ListenerStateStore()
         self.token = token
         self.client = client
+        self.clock = clock or datetime.now
         self.alias_registry = AliasRegistry()
         self._session: WeFlowSession | None = None
 
@@ -49,10 +51,13 @@ class WeFlowLiveListener:
             client = self.client or WeFlowImportClient(self.config.base_url, token_value)
             session = self._resolve_session(client)
             state = self.state_store.load().with_session_id(session.id)
-            payload = client.pull_messages(session.id, since=None, end=None, limit=100, offset=0)
+            since = int((self.clock() - timedelta(hours=1)).timestamp())
+            payload = client.pull_messages(session.id, since=since, end=None, limit=100, offset=0)
             events: list[ChatEvent] = []
             for raw in payload.get("messages", []):
                 if not isinstance(raw, dict):
+                    continue
+                if int(raw.get("timestamp") or 0) < since:
                     continue
                 event = self._event_from_raw(raw, session)
                 if event is None or event.event_id in state.seen_event_ids:

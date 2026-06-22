@@ -13,6 +13,7 @@ from .chat_log_sanitizer import hash_identifier
 from .wechat_assisted_paste import AssistedPasteAdapter
 from .wechat_bridge_config import WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
+from .weflow_import import WeFlowImportClient, WeFlowImportConfig, fetch_weflow_messages
 from .workbench_models import ChatEvent, GroupConfig
 from .workbench_presenter import build_demo_events, format_item_summary, status_label
 from .workbench_session import DEFAULT_CANDIDATE_PATH, DEFAULT_LOG_PATH, WorkbenchItem, WorkbenchSession
@@ -43,6 +44,47 @@ class WorkbenchWebState:
     def import_jsonl_text(self, text: str) -> dict[str, Any]:
         self.items = [self.session.process_event(event) for event in load_events_from_jsonl_text(text)]
         return self.list_items()
+
+    def import_weflow_group(
+        self,
+        group_name: str,
+        *,
+        client: WeFlowImportClient | None = None,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        active_group_name = group_name.strip()
+        if not active_group_name:
+            raise ValueError("群聊名称不能为空")
+        config = WeFlowImportConfig(
+            group_name=active_group_name,
+            keywords=[],
+            limit=5000,
+            base_url=self.wechat_config.base_url,
+            token_env=self.wechat_config.token_env,
+        )
+        fetched = fetch_weflow_messages(config, client=client, token=token)
+        self.group_config = GroupConfig(group_name=fetched.group_name, mode=self.group_config.mode)
+        self.items = [
+            self.session.process_event(
+                ChatEvent(
+                    event_id=message.platform_message_id_hash,
+                    group_id_hash=message.group_id_hash,
+                    group_name=message.group_name,
+                    sender_alias=message.sender_alias,
+                    sender_role=message.sender_role,
+                    message_time=message.message_time,
+                    content=message.content,
+                    raw_type=str(message.raw_type),
+                    source=message.source,
+                )
+            )
+            for message in fetched.messages
+        ]
+        return {
+            "status": "ok",
+            "message": f"已从 WeFlow 导入 {len(self.items)} 条聊天记录：{fetched.group_name}",
+            "items": [serialize_item(item) for item in self.items],
+        }
 
     def list_items(self) -> dict[str, Any]:
         return {"items": [serialize_item(item) for item in self.items]}
@@ -184,6 +226,9 @@ def create_handler(state: WorkbenchWebState):
                     return
                 if path == "/api/import-jsonl":
                     self._send_json(state.import_jsonl_text(str(payload.get("text") or "")))
+                    return
+                if path == "/api/import-weflow":
+                    self._send_json(state.import_weflow_group(str(payload.get("group_name") or "")))
                     return
                 if path == "/api/send":
                     self._send_json(state.send_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
@@ -381,7 +426,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       padding: 7px 8px;
       font: inherit;
     }
-    button, input[type="file"]::file-selector-button {
+    button {
       border: 1px solid var(--line);
       background: #fff;
       color: var(--text);
@@ -506,11 +551,6 @@ WORKBENCH_HTML = r"""<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .upload {
-      display: grid;
-      gap: 8px;
-      margin-top: 10px;
-    }
     @media (max-width: 980px) {
       main {
         grid-template-columns: 190px minmax(320px, 1fr);
@@ -542,9 +582,11 @@ WORKBENCH_HTML = r"""<!doctype html>
       <div class="group active">夏令营咨询群<small>监听演示中</small></div>
       <div class="group">入营通知群<small>待接入</small></div>
       <div class="group">技术答疑群<small>待接入</small></div>
-      <div id="wechatDebugConfig" class="bridge" hidden>
+      <div class="bridge">
         <label for="wechatGroupName">群聊名称</label>
         <input id="wechatGroupName" value="沐曦开源英才夏令营咨询群">
+      </div>
+      <div id="wechatDebugConfig" class="bridge" hidden>
         <label for="wechatSessionId">Session ID</label>
         <input id="wechatSessionId" value="" placeholder="可选：直接指定 WeFlow session_id">
         <label for="wechatKeywords">关键词</label>
@@ -558,10 +600,7 @@ WORKBENCH_HTML = r"""<!doctype html>
         <button onclick="pollWechatOnce()">拉取新消息</button>
         <button onclick="stopWechatListener()">停止监听</button>
         <button onclick="loadDemo()">载入演示</button>
-        <button onclick="document.getElementById('jsonlFile').click()">导入 JSONL</button>
-      </div>
-      <div class="upload">
-        <input id="jsonlFile" type="file" accept=".jsonl,.txt" onchange="importJsonlFile()" hidden>
+        <button onclick="importWeFlowGroup()">从 WeFlow 导入</button>
       </div>
     </aside>
     <section class="stream">
@@ -634,8 +673,8 @@ WORKBENCH_HTML = r"""<!doctype html>
 
     function readWechatConfig() {
       const config = {...currentWechatConfig};
+      config.group_name = document.getElementById('wechatGroupName').value.trim();
       if (config.show_debug_config) {
-        config.group_name = document.getElementById('wechatGroupName').value.trim();
         config.session_id = document.getElementById('wechatSessionId').value.trim();
         config.keywords = document.getElementById('wechatKeywords').value.split(',').map(x => x.trim()).filter(Boolean);
         config.poll_interval_seconds = Number(document.getElementById('wechatPollSeconds').value || 5);
@@ -770,19 +809,20 @@ WORKBENCH_HTML = r"""<!doctype html>
       }
     }
 
-    async function importJsonlFile() {
-      const input = document.getElementById('jsonlFile');
-      const file = input.files[0];
-      if (!file) return;
+    async function importWeFlowGroup() {
       try {
-        const text = await file.text();
-        const data = await requestJson('/api/import-jsonl', {text});
+        const saved = await saveWechatConfig();
+        if (!saved) return;
+        const groupName = saved.config.group_name || document.getElementById('wechatGroupName').value.trim();
+        if (!groupName) {
+          setStatus('请先填写群聊名称。');
+          return;
+        }
+        const data = await requestJson('/api/import-weflow', {group_name: groupName});
         renderItems(data.items);
-        setStatus(`已导入 ${data.items.length} 条聊天记录：${file.name}`);
+        setStatus(data.message);
       } catch (error) {
         setStatus(error.message);
-      } finally {
-        input.value = '';
       }
     }
 
