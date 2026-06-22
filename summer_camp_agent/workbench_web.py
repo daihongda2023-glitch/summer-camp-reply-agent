@@ -297,6 +297,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       background: var(--bg);
       color: var(--text);
       font: 14px/1.5 "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      overflow: hidden;
     }
     header {
       height: 52px;
@@ -328,6 +329,10 @@ WORKBENCH_HTML = r"""<!doctype html>
       background: var(--panel);
     }
     .left {
+      grid-column: 1;
+      grid-row: 1 / 4;
+      min-height: 0;
+      overflow: auto;
       padding: 12px;
       background: #f0f2f4;
     }
@@ -456,7 +461,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       word-break: break-word;
     }
     .reply {
-      grid-column: 1 / 4;
+      grid-column: 2 / 4;
       grid-row: 2;
       display: grid;
       grid-template-rows: minmax(92px, 1fr) auto;
@@ -491,7 +496,7 @@ WORKBENCH_HTML = r"""<!doctype html>
       min-width: 112px;
     }
     .statusbar {
-      grid-column: 1 / 4;
+      grid-column: 2 / 4;
       grid-row: 3;
       padding: 6px 12px;
       color: var(--muted);
@@ -512,12 +517,12 @@ WORKBENCH_HTML = r"""<!doctype html>
         grid-template-rows: minmax(0, 1fr) auto minmax(220px, 35vh);
       }
       .decision {
-        grid-column: 1 / 3;
+        grid-column: 2;
         grid-row: 3;
         border-top: 1px solid var(--line);
       }
       .reply {
-        grid-column: 1 / 3;
+        grid-column: 2;
         grid-row: 2;
       }
       .statusbar {
@@ -820,8 +825,14 @@ WORKBENCH_HTML = r"""<!doctype html>
       try {
         const data = await requestJson('/api/wechat/poll', {});
         renderItems(data.items);
+        if (data.status === 'error') {
+          clearWechatPolling();
+          setStatus(`${data.message}（已停止自动轮询）`);
+          return;
+        }
         setStatus(data.message);
       } catch (error) {
+        clearWechatPolling();
         setStatus(error.message);
       }
     }

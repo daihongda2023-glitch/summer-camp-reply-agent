@@ -12,6 +12,7 @@ from .weflow_import import (
     WeFlowImportClient,
     WeFlowImportError,
     WeFlowSession,
+    WeFlowSessionNotFoundError,
     WeFlowSessionSelectionRequired,
 )
 from .workbench_models import ChatEvent
@@ -74,6 +75,8 @@ class WeFlowLiveListener:
             self._session = WeFlowSession(self.config.session_id, self.config.group_name or self.config.session_id, "group")
             return self._session
         sessions = client.search_sessions(self.config.group_name)
+        if not sessions:
+            raise WeFlowSessionNotFoundError(f"没有找到匹配群聊：{self.config.group_name}")
         exact = [session for session in sessions if session.name == self.config.group_name]
         candidates = exact or sessions
         if len(candidates) != 1:

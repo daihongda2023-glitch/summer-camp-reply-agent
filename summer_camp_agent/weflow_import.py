@@ -88,11 +88,13 @@ class WeFlowImportClient:
         payload = self._get_json("/api/v1/sessions", {"format": "chatlab", "keyword": keyword, "limit": 100})
         raw_sessions = payload.get("sessions", [])
         sessions = []
+        normalized_keyword = keyword.strip().casefold()
         for raw in raw_sessions:
             if not isinstance(raw, dict):
                 continue
             session = _session_from_chatlab(raw)
-            if session.type == "group":
+            normalized_name = session.name.casefold()
+            if session.type == "group" and (not normalized_keyword or normalized_keyword in normalized_name):
                 sessions.append(session)
         return sessions
 
@@ -139,7 +141,7 @@ class WeFlowImportClient:
         except HTTPError as exc:
             if exc.code in (401, 403):
                 raise WeFlowAuthError("WeFlow API 鉴权失败，请检查 WEFLOW_API_TOKEN。") from exc
-            raise WeFlowHttpError(exc.code, f"WeFlow API 返回错误: HTTP {exc.code}") from exc
+            raise WeFlowHttpError(exc.code, _format_http_error_message(exc)) from exc
         except URLError as exc:
             raise WeFlowImportError("无法连接 WeFlow API，请确认 WeFlow 已启动并开启 API 服务。") from exc
         try:
@@ -149,6 +151,47 @@ class WeFlowImportClient:
         if not isinstance(payload, dict):
             raise WeFlowImportError("WeFlow API 返回结构不是 JSON 对象。")
         return payload
+
+
+def _format_http_error_message(exc: HTTPError) -> str:
+    message = f"WeFlow API 返回错误: HTTP {exc.code}"
+    detail = _read_http_error_detail(exc)
+    if detail:
+        message = f"{message}；{detail}"
+    if exc.code >= 500 and _looks_like_message_cursor_failure(detail):
+        message = (
+            f"{message}。检测到 WeFlow 无法打开微信消息数据库，请在 WeFlow 中重新指定微信数据目录，"
+            "确认微信已登录并能查看聊天记录，然后重启 WeFlow 后再试。"
+        )
+    return message
+
+
+def _read_http_error_detail(exc: HTTPError) -> str:
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        detail = text
+    else:
+        if isinstance(payload, dict):
+            detail = str(payload.get("error") or payload.get("message") or "")
+        else:
+            detail = str(payload)
+    return " ".join(detail.split())[:300]
+
+
+def _looks_like_message_cursor_failure(detail: str) -> bool:
+    lowered = detail.casefold()
+    return "创建游标失败" in detail or "no message db" in lowered or "-3" in detail
 
 
 def import_weflow_chat(

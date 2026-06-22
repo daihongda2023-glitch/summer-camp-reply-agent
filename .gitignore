@@ -13,6 +13,7 @@ data/reply_candidates.jsonl
 data/reply_logs.jsonl
 data/listener_state.json
 data/wechat_bridge_config.json
+data/agent_launcher.log
 data/workbench_*.out
 data/workbench_*.err
 

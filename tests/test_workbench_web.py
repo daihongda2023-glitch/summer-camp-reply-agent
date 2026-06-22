@@ -25,6 +25,16 @@ class WorkbenchWebTest(unittest.TestCase):
         self.assertIn("show_debug_config", WORKBENCH_HTML)
         self.assertNotIn("session_id: ''", WORKBENCH_HTML)
 
+    def test_html_stops_wechat_polling_after_listener_error(self):
+        self.assertIn("if (data.status === 'error')", WORKBENCH_HTML)
+        self.assertIn("clearWechatPolling();", WORKBENCH_HTML)
+
+    def test_layout_keeps_reply_bar_out_of_left_sidebar(self):
+        self.assertIn(".left {\n      grid-column: 1;\n      grid-row: 1 / 4;", WORKBENCH_HTML)
+        self.assertIn("overflow: auto;", WORKBENCH_HTML)
+        self.assertIn(".reply {\n      grid-column: 2 / 4;", WORKBENCH_HTML)
+        self.assertIn(".statusbar {\n      grid-column: 2 / 4;", WORKBENCH_HTML)
+
     def test_html_maps_decision_panel_machine_values_to_chinese(self):
         self.assertIn("formatDecisionValue", WORKBENCH_HTML)
         self.assertIn("triggerReasonLabels", WORKBENCH_HTML)

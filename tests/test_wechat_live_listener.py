@@ -6,13 +6,16 @@ from summer_camp_agent.weflow_import import WeFlowSession
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, sessions=None):
         self.search_calls = []
         self.pull_calls = []
+        self.sessions = (
+            [WeFlowSession(id="room@chatroom", name="测试群", type="group")] if sessions is None else sessions
+        )
 
     def search_sessions(self, keyword):
         self.search_calls.append(keyword)
-        return [WeFlowSession(id="room@chatroom", name="测试群", type="group")]
+        return self.sessions
 
     def pull_messages(self, session_id, *, since, end, limit, offset):
         self.pull_calls.append((session_id, since, end, limit, offset))
@@ -99,6 +102,19 @@ class WeFlowLiveListenerTest(unittest.TestCase):
 
         self.assertEqual(result.status, "error")
         self.assertIn("缺少 MISSING_WEFLOW_TOKEN", result.message)
+
+    def test_poll_once_reports_group_not_found(self):
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="不存在的群"),
+            state_store=MemoryStateStore(),
+            client=FakeClient(sessions=[]),
+            token="fake-token",
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.status, "error")
+        self.assertIn("没有找到匹配群聊：不存在的群", result.message)
 
 
 if __name__ == "__main__":

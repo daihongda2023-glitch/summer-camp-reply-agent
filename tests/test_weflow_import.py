@@ -57,6 +57,24 @@ class WeFlowImportTest(unittest.TestCase):
         self.assertEqual(sessions[0].id, "room@chatroom")
         self.assertEqual(opener.requests[0].headers["Authorization"], "Bearer secret-token")
 
+    def test_search_sessions_filters_unrelated_groups_when_api_ignores_keyword(self):
+        opener = FakeUrlOpen(
+            [
+                {
+                    "sessions": [
+                        {"id": "a@chatroom", "name": "无关群", "type": "group"},
+                        {"id": "b@chatroom", "name": "沐曦开源英才夏令营咨询群", "type": "group"},
+                        {"id": "channel", "name": "沐曦通知", "type": "channel"},
+                    ]
+                }
+            ]
+        )
+        client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=opener)
+
+        sessions = client.search_sessions("沐曦")
+
+        self.assertEqual([session.id for session in sessions], ["b@chatroom"])
+
     def test_import_writes_sanitized_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:
             opener = FakeUrlOpen(
@@ -132,6 +150,14 @@ class WeFlowImportTest(unittest.TestCase):
         client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=FakeUrlOpen([URLError("refused")]))
 
         with self.assertRaisesRegex(WeFlowImportError, "无法连接"):
+            client.search_sessions("测试")
+
+    def test_http_500_includes_weflow_error_body_and_cursor_hint(self):
+        response = BytesIO(json.dumps({"error": "创建游标失败: -3，请查看日志"}).encode("utf-8"))
+        server_error = HTTPError("http://127.0.0.1", 500, "Internal Server Error", {}, response)
+        client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=FakeUrlOpen([server_error]))
+
+        with self.assertRaisesRegex(WeFlowImportError, "消息数据库"):
             client.search_sessions("测试")
 
     def test_pull_messages_falls_back_to_legacy_messages_endpoint(self):
