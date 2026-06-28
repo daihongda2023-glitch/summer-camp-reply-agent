@@ -6,6 +6,10 @@ __pycache__/
 *.pem
 *.key
 
+desktop/node_modules/
+desktop/dist/
+desktop/.vite/
+
 data/local_overrides.json
 data/pending_questions.jsonl
 data/chat_groups.json
@@ -16,6 +20,8 @@ data/wechat_bridge_config.json
 data/agent_launcher.log
 data/workbench_*.out
 data/workbench_*.err
+data/desktop-*.out
+data/desktop-*.err
 
 # 微信/WeFlow 导入数据与派生索引，默认只保留在本地
 imports/chat_logs/

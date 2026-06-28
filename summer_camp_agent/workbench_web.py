@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import webbrowser
 
 from .chat_log_sanitizer import hash_identifier
+from .desktop_settings import DesktopSettings, DesktopSettingsStore
 from .wechat_assisted_paste import AssistedPasteAdapter
 from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
@@ -27,6 +28,7 @@ class WorkbenchWebState:
         log_path: str | Path = DEFAULT_LOG_PATH,
         group_config: GroupConfig | None = None,
         wechat_config_path: str | Path | None = None,
+        desktop_settings_path: str | Path | None = None,
     ):
         self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
         self.session = WorkbenchSession(self.group_config, candidate_path=candidate_path, log_path=log_path)
@@ -36,6 +38,72 @@ class WorkbenchWebState:
         self.wechat_listener = None
         self.wechat_listener_running = False
         self.paste_adapter = AssistedPasteAdapter()
+        self.desktop_settings_store = (
+            DesktopSettingsStore(desktop_settings_path) if desktop_settings_path else DesktopSettingsStore()
+        )
+        self.desktop_settings = self.desktop_settings_store.load()
+        self.app_running = False
+        self.recent_logs: list[str] = []
+
+    def get_app_status(self) -> dict[str, Any]:
+        return {
+            "engine": {
+                "status": "running" if self.app_running else "idle",
+                "listener_running": self.wechat_listener_running,
+                "group_name": self.wechat_config.group_name,
+            },
+            "settings": self.desktop_settings.to_dict(),
+            "recent_logs": self.recent_logs[-20:],
+        }
+
+    def start_app(self) -> dict[str, Any]:
+        self.app_running = True
+        self.recent_logs.append("桌面控制器已启动")
+        return self.get_app_status()
+
+    def stop_app(self) -> dict[str, Any]:
+        self.app_running = False
+        self.wechat_listener_running = False
+        self.recent_logs.append("桌面控制器已停止")
+        return self.get_app_status()
+
+    def get_app_settings(self) -> dict[str, Any]:
+        self.desktop_settings = self.desktop_settings_store.load()
+        return {
+            "settings": self.desktop_settings.to_dict(),
+            "wechat": self.wechat_config.to_dict(),
+            "reply": {
+                "mode": self.group_config.mode,
+                "auto_reply_intents": self.group_config.auto_reply_intents,
+                "daily_auto_reply_limit": self.group_config.daily_auto_reply_limit,
+            },
+        }
+
+    def update_app_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings = DesktopSettings.from_dict(payload)
+        self.desktop_settings_store.save(settings)
+        self.desktop_settings = settings
+        if isinstance(payload.get("wechat"), dict):
+            self.wechat_config = WeChatBridgeConfig.from_dict(payload["wechat"])
+            self.wechat_config_store.save(self.wechat_config)
+        if isinstance(payload.get("reply"), dict):
+            reply = payload["reply"]
+            self.group_config = GroupConfig(
+                group_name=self.group_config.group_name,
+                group_id_hash=self.group_config.group_id_hash,
+                enabled=self.group_config.enabled,
+                mode=str(reply.get("mode") or self.group_config.mode),
+                keywords=[*self.group_config.keywords],
+                agent_mentions=[*self.group_config.agent_mentions],
+                auto_reply_intents=[
+                    str(item).strip()
+                    for item in reply.get("auto_reply_intents", self.group_config.auto_reply_intents)
+                    if str(item).strip()
+                ],
+                daily_auto_reply_limit=int(reply.get("daily_auto_reply_limit") or self.group_config.daily_auto_reply_limit),
+            )
+        self.recent_logs.append("桌面设置已保存")
+        return self.get_app_settings()
 
     def load_demo_items(self) -> dict[str, Any]:
         self.items = [self.session.process_event(event) for event in build_demo_events()]
@@ -215,6 +283,12 @@ def create_handler(state: WorkbenchWebState):
             if path == "/api/wechat/config":
                 self._send_json(state.get_wechat_config())
                 return
+            if path == "/api/app/status":
+                self._send_json(state.get_app_status())
+                return
+            if path == "/api/app/settings":
+                self._send_json(state.get_app_settings())
+                return
             self._send_json({"error": "未找到接口"}, status=404)
 
         def do_POST(self) -> None:
@@ -255,6 +329,15 @@ def create_handler(state: WorkbenchWebState):
                     return
                 if path == "/api/wechat/confirm-sent":
                     self._send_json(state.confirm_sent(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/app/start":
+                    self._send_json(state.start_app())
+                    return
+                if path == "/api/app/stop":
+                    self._send_json(state.stop_app())
+                    return
+                if path == "/api/app/settings":
+                    self._send_json(state.update_app_settings(payload))
                     return
                 self._send_json({"error": "未找到接口"}, status=404)
             except Exception as exc:  # noqa: BLE001 - local UI should surface friendly errors

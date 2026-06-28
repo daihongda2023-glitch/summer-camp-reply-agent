@@ -62,6 +62,29 @@ class LauncherScriptsTest(unittest.TestCase):
         self.assertIn(r"scripts\start_agent_workbench.ps1", script)
         self.assertIn("Start-Process", script)
 
+    def test_desktop_launcher_starts_electron_app(self):
+        script_path = ROOT / "scripts" / "start_desktop_app.ps1"
+        self.assertTrue(script_path.exists())
+
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("desktop", script)
+        self.assertIn("npm.cmd", script)
+        self.assertIn("run", script)
+        self.assertIn("dev", script)
+        self.assertIn("build:main", script)
+        self.assertIn("--strictPort", script)
+        self.assertIn("Test-LocalPortListening", script)
+        self.assertIn("Stop-DesktopProcesses", script)
+        self.assertIn("Stop-PortOwner", script)
+        self.assertIn("Get-CimInstance Win32_Process", script)
+        self.assertIn("vite", script)
+        self.assertIn("summer_camp_agent", script)
+        self.assertIn("workbench_server", script)
+        self.assertIn("5178", script)
+        self.assertIn("ELECTRON_RENDERER_URL", script)
+        self.assertIn("-WindowStyle Hidden", script)
+
 
 if __name__ == "__main__":
     unittest.main()

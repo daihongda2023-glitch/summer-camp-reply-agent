@@ -1,7 +1,8 @@
 import unittest
 from datetime import date
 
-from summer_camp_agent.engine import AnswerEngine
+from summer_camp_agent.engine import AnswerEngine, AnswerResult
+from summer_camp_agent.answer_providers import ProviderAnswer
 from summer_camp_agent.knowledge import KnowledgeBase
 from summer_camp_agent.rag_retriever import RagSearchResult
 
@@ -14,6 +15,21 @@ class FakeRagRetriever:
     def retrieve(self, question):
         self.questions.append(question)
         return self.result
+
+
+class CustomProvider:
+    name = "custom"
+
+    def answer(self, question):
+        return ProviderAnswer.hit(
+            AnswerResult(
+                action="suggested_reply",
+                reply=f"自定义回复：{question}",
+                intent="custom.intent",
+                source="custom-provider",
+                confidence=0.88,
+            )
+        )
 
 
 def make_engine(today=date(2026, 6, 20), rag_retriever=None):
@@ -98,6 +114,17 @@ class AnswerEngineTest(unittest.TestCase):
 
         self.assertEqual(result.action, "needs_info")
         self.assertIn("当前资料还没有明确说明", result.reply)
+
+    def test_can_use_custom_answer_provider_chain(self):
+        result = AnswerEngine(
+            KnowledgeBase.from_default(),
+            providers=[CustomProvider()],
+        ).answer("报名入口在哪里？")
+
+        self.assertEqual(result.action, "suggested_reply")
+        self.assertEqual(result.intent, "custom.intent")
+        self.assertEqual(result.source, "custom-provider")
+        self.assertEqual(result.reply, "自定义回复：报名入口在哪里？")
 
 
 if __name__ == "__main__":

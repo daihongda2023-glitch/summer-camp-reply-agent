@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from .answer_providers import AnswerProvider, AnswerProviderChain
 from .knowledge import FAQItem, KnowledgeBase
 
 
@@ -17,12 +18,22 @@ class AnswerResult:
 
 
 class AnswerEngine:
-    def __init__(self, knowledge_base: KnowledgeBase, today: date | None = None, rag_retriever=None):
+    def __init__(
+        self,
+        knowledge_base: KnowledgeBase,
+        today: date | None = None,
+        rag_retriever=None,
+        providers: list[AnswerProvider] | None = None,
+    ):
         self.knowledge_base = knowledge_base
         self.today = today or date.today()
         self.rag_retriever = rag_retriever
+        self.provider_chain = AnswerProviderChain(providers) if providers is not None else None
 
     def answer(self, text: str) -> AnswerResult:
+        if self.provider_chain is not None:
+            return self.provider_chain.answer(text)
+
         fallback = self._human_fallback(text)
         if fallback:
             return fallback

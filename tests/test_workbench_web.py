@@ -40,6 +40,55 @@ class WorkbenchWebTest(unittest.TestCase):
 
         self.assertEqual(payload["config"]["group_name"], DEFAULT_GROUP_NAME)
 
+    def test_app_settings_api_round_trips_desktop_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                desktop_settings_path=root / "desktop_settings.json",
+            )
+
+            payload = state.update_app_settings(
+                {
+                    "main_view": {
+                        "show_target": False,
+                        "show_recent_logs": True,
+                        "show_history_entry": True,
+                        "show_status_detail": True,
+                        "show_assist_actions": False,
+                    },
+                    "advanced_pages": {
+                        "messages": True,
+                        "candidates": True,
+                        "work_trace": False,
+                        "rag": True,
+                    },
+                }
+            )
+            reloaded = WorkbenchWebState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                desktop_settings_path=root / "desktop_settings.json",
+            ).get_app_settings()
+
+        self.assertEqual(payload["settings"]["main_view"]["show_target"], False)
+        self.assertEqual(reloaded["settings"]["main_view"]["show_status_detail"], True)
+        self.assertEqual(reloaded["settings"]["advanced_pages"]["rag"], True)
+
+    def test_app_status_reflects_start_and_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchWebState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+
+            idle = state.get_app_status()
+            started = state.start_app()
+            stopped = state.stop_app()
+
+        self.assertEqual(idle["engine"]["status"], "idle")
+        self.assertEqual(started["engine"]["status"], "running")
+        self.assertEqual(stopped["engine"]["status"], "idle")
+
     def test_html_stops_wechat_polling_after_listener_error(self):
         self.assertIn("if (data.status === 'error')", WORKBENCH_HTML)
         self.assertIn("clearWechatPolling();", WORKBENCH_HTML)

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from summer_camp_agent.workbench_models import ChatEvent, GroupConfig
@@ -162,6 +163,38 @@ class WorkbenchSessionTest(unittest.TestCase):
 
             self.assertIn("官方链接", (root / "candidates.jsonl").read_text(encoding="utf-8"))
             self.assertIn("edited_and_confirmed_sent", (root / "logs.jsonl").read_text(encoding="utf-8"))
+
+    def test_records_work_trace_for_processing_and_confirmed_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace_path = root / "work_trace.jsonl"
+            session = WorkbenchSession(
+                group_config=GroupConfig(group_name="夏令营咨询群", mode="semi_auto", keywords=["报名"]),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                trace_path=trace_path,
+            )
+            event = ChatEvent(
+                "evt-trace",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-06-21 10:00:00",
+                "报名入口在哪里？",
+                "text",
+                "manual",
+            )
+
+            item = session.process_event(event)
+            session.confirm_operator_sent(item, item.review_card.reply)
+
+            rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([row["event_id"] for row in rows], ["evt-trace", "evt-trace", "evt-trace"])
+        self.assertEqual([row["phase"] for row in rows], ["observe", "think", "act"])
+        self.assertEqual(rows[-1]["action"], "confirm_sent")
+        self.assertEqual(rows[-1]["outcome"], "ok")
 
 
 if __name__ == "__main__":
