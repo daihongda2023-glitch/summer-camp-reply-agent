@@ -23,7 +23,7 @@ body::before {
   -webkit-app-region: drag;
   z-index: 10;
 }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 
 .controller-shell {
   width: 100vw;
@@ -162,10 +162,10 @@ button, input, textarea { font: inherit; }
 .toggle-row input { width: 18px; height: 18px; accent-color: var(--accent); }
 .field-row { align-items: flex-start; padding: 8px 0; }
 .field-row span, .readonly-line span { color: var(--muted); }
-.field-row > input, .field-row textarea, .input-with-unit {
+.field-row > input, .field-row textarea, .field-row select, .input-with-unit {
   width: min(340px, 62%);
 }
-.field-row input, .field-row textarea {
+.field-row input, .field-row textarea, .field-row select {
   min-width: 0;
   border: 1px solid #2c2f3a;
   border-radius: 8px;
@@ -175,7 +175,7 @@ button, input, textarea { font: inherit; }
   outline: none;
 }
 .field-row textarea { resize: vertical; min-height: 76px; line-height: 1.45; }
-.field-row input:focus, .field-row textarea:focus {
+.field-row input:focus, .field-row textarea:focus, .field-row select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(24, 194, 139, .12);
 }
@@ -488,14 +488,15 @@ button, input, textarea { font: inherit; }
 
 .workflow-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) minmax(180px, 24vh);
+  grid-template-rows: auto auto minmax(0, 1fr) minmax(240px, 30vh);
   gap: 14px;
   padding: 52px 20px 18px;
   overflow: hidden;
 }
 
 .workflow-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
@@ -505,15 +506,22 @@ button, input, textarea { font: inherit; }
   background: var(--surface);
 }
 
+.workflow-header > div {
+  min-width: 0;
+}
+
 .workflow-header h1 {
   margin: 3px 0 6px;
-  font-size: 24px;
+  font-size: clamp(20px, 5vw, 24px);
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .workflow-header p {
+  max-width: 100%;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.45;
 }
 
 .eyebrow {
@@ -645,12 +653,15 @@ button, input, textarea { font: inherit; }
 }
 
 .decision-panel header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: flex-start;
 }
 
 .decision-panel h2 {
   margin-top: 3px;
   font-size: 18px;
+  overflow-wrap: anywhere;
 }
 
 .decision-grid {
@@ -674,16 +685,19 @@ button, input, textarea { font: inherit; }
 
 .decision-grid dt {
   color: var(--muted);
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .reply-composer {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(96px, 1fr) auto;
   gap: 8px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+  overflow: hidden;
 }
 
 .composer-head label {
@@ -703,6 +717,7 @@ button, input, textarea { font: inherit; }
 .reply-composer textarea,
 .sidebar-section textarea {
   width: 100%;
+  height: 100%;
   min-height: 84px;
   resize: none;
   border: 1px solid #3a3d49;
@@ -757,14 +772,16 @@ button, input, textarea { font: inherit; }
   .workbench-shell {
     height: 100vh;
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto;
     overflow: auto;
   }
 
   .workbench-sidebar {
+    min-height: auto;
     padding: 52px 18px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow: visible;
   }
 
   .sidebar-guide {
@@ -772,8 +789,9 @@ button, input, textarea { font: inherit; }
   }
 
   .workflow-panel {
+    min-height: auto;
     padding: 18px;
-    grid-template-rows: auto auto minmax(300px, 1fr) minmax(180px, auto);
+    grid-template-rows: auto auto minmax(300px, auto) minmax(300px, auto);
     overflow: visible;
   }
 
@@ -783,18 +801,29 @@ button, input, textarea { font: inherit; }
     display: grid;
   }
 
+  .workflow-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .workflow-actions,
-  .reply-actions,
+  .reply-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    justify-content: stretch;
+  }
+
   .manual-entry {
     grid-template-columns: 1fr;
     justify-content: stretch;
   }
 
   .decision-panel {
+    min-height: auto;
     display: block;
     padding: 18px;
     border-left: 0;
     border-top: 1px solid var(--line);
+    overflow: visible;
   }
 
   .composer-head p {
@@ -802,15 +831,38 @@ button, input, textarea { font: inherit; }
     text-align: left;
   }
 
+  .message-row {
+    grid-template-columns: 1fr;
+  }
+
+  .message-row small {
+    grid-column: 1;
+  }
+
+  .decision-grid {
+    grid-template-columns: minmax(96px, max-content) minmax(0, 1fr);
+    gap: 12px 14px;
+  }
+
+  .reply-actions > button:last-child {
+    grid-column: 1 / -1;
+  }
+
   .workflow-actions > button,
   .reply-actions > button,
   .manual-entry > button {
-    flex: 1 1 120px;
+    flex: unset;
     width: 100%;
     min-width: 0;
   }
 
   .primary-action.compact {
-    flex: 1 1 140px;
+    flex: unset;
+  }
+}
+
+@media (max-width: 420px) {
+  .decision-grid {
+    grid-template-columns: 1fr;
   }
 }
