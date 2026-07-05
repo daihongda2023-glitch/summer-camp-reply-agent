@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 from dataclasses import dataclass
 import sys
 
@@ -65,6 +66,34 @@ class WindowsPasteBackend:
     def __init__(self):
         self.user32 = ctypes.windll.user32 if sys.platform == "win32" else None
         self.kernel32 = ctypes.windll.kernel32 if sys.platform == "win32" else None
+        if sys.platform == "win32":
+            self._configure_win32_api()
+
+    def _configure_win32_api(self) -> None:
+        self.kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        self.kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        self.kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        self.kernel32.GlobalLock.restype = ctypes.c_void_p
+        self.kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        self.kernel32.GlobalUnlock.restype = ctypes.wintypes.BOOL
+        self.kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        self.kernel32.GlobalFree.restype = ctypes.c_void_p
+        self.user32.OpenClipboard.argtypes = [ctypes.wintypes.HWND]
+        self.user32.OpenClipboard.restype = ctypes.wintypes.BOOL
+        self.user32.EmptyClipboard.argtypes = []
+        self.user32.EmptyClipboard.restype = ctypes.wintypes.BOOL
+        self.user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        self.user32.SetClipboardData.restype = ctypes.c_void_p
+        self.user32.CloseClipboard.argtypes = []
+        self.user32.CloseClipboard.restype = ctypes.wintypes.BOOL
+        self.user32.GetForegroundWindow.argtypes = []
+        self.user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        self.user32.GetWindowTextLengthW.argtypes = [ctypes.wintypes.HWND]
+        self.user32.GetWindowTextLengthW.restype = ctypes.c_int
+        self.user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]
+        self.user32.GetWindowTextW.restype = ctypes.c_int
+        self.user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.wintypes.DWORD, ctypes.c_void_p]
+        self.user32.keybd_event.restype = None
 
     def set_clipboard_text(self, text: str) -> None:
         if sys.platform != "win32":
@@ -75,15 +104,19 @@ class WindowsPasteBackend:
             raise OSError("GlobalAlloc failed")
         locked = self.kernel32.GlobalLock(h_global)
         if not locked:
+            self.kernel32.GlobalFree(h_global)
             raise OSError("GlobalLock failed")
         ctypes.memmove(locked, data, len(data))
         self.kernel32.GlobalUnlock(h_global)
         if not self.user32.OpenClipboard(None):
+            self.kernel32.GlobalFree(h_global)
             raise OSError("OpenClipboard failed")
         try:
             self.user32.EmptyClipboard()
             if not self.user32.SetClipboardData(self.CF_UNICODETEXT, h_global):
+                self.kernel32.GlobalFree(h_global)
                 raise OSError("SetClipboardData failed")
+            h_global = None
         finally:
             self.user32.CloseClipboard()
 

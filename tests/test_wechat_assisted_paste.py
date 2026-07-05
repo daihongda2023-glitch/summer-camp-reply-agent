@@ -1,7 +1,9 @@
+import ctypes
 import inspect
+import sys
 import unittest
 
-from summer_camp_agent.wechat_assisted_paste import AssistedPasteAdapter, PasteResult
+from summer_camp_agent.wechat_assisted_paste import AssistedPasteAdapter, PasteResult, WindowsPasteBackend
 
 
 class FakeBackend:
@@ -65,6 +67,17 @@ class WechatAssistedPasteTest(unittest.TestCase):
         self.assertNotIn("leftdown", source)
         self.assertNotIn("leftup", source)
         self.assertIsInstance(PasteResult("copied", "ok"), PasteResult)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows API signatures only apply on Windows")
+    def test_windows_backend_declares_pointer_sized_clipboard_handles(self):
+        backend = WindowsPasteBackend()
+
+        self.assertIs(backend.kernel32.GlobalAlloc.restype, ctypes.c_void_p)
+        self.assertIs(backend.kernel32.GlobalLock.restype, ctypes.c_void_p)
+        self.assertIs(backend.kernel32.GlobalFree.restype, ctypes.c_void_p)
+        self.assertIs(backend.user32.SetClipboardData.restype, ctypes.c_void_p)
+        self.assertEqual(backend.kernel32.GlobalLock.argtypes, [ctypes.c_void_p])
+        self.assertEqual(backend.user32.SetClipboardData.argtypes, [ctypes.c_uint, ctypes.c_void_p])
 
 
 class NonWechatBackend(FakeBackend):
