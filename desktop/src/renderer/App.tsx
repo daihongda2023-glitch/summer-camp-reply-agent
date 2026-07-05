@@ -5,6 +5,7 @@ import type {
   AppStatus,
   DesktopApi,
   DesktopSettings,
+  PasteReplyResult,
   VisionStatus,
   WeChatBridgeSettings,
   WorkbenchItem,
@@ -164,7 +165,6 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   const [message, setMessage] = useState('桌面工作台已就绪')
   const [vision, setVision] = useState<VisionStatus>({ running: false, window_title: '', last_message: '', last_error: '' })
   const selected = itemsPayload.items.find((item) => item.event_id === selectedId) ?? itemsPayload.items[0]
-  const autoSend = status.engine.send_mode === 'auto_send'
 
   useEffect(() => {
     void refreshItems()
@@ -218,14 +218,14 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   }
 
   async function pasteReply() {
-    await runAction(autoSend ? '正在自动发送...' : '正在填入微信...', async () => {
+    await runAction('正在填入微信...', async () => {
       if (!selected) {
         setMessage('请先选择一条消息')
         return
       }
       const pasteReply = getDesktopMethod('pasteReply')
       const result = await pasteReply(selected.event_id, replyDraft)
-      setMessage(result.message)
+      setMessage(pasteStatusMessage(result))
     })
   }
 
@@ -382,8 +382,8 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
           </div>
           <textarea id="replyDraft" value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} />
           <div className="reply-actions">
-            <button className="primary-action compact" type="button" onClick={pasteReply}>{autoSend ? '自动发送' : '填入微信'}</button>
-            {!autoSend && <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>}
+            <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
+            <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
             <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
           </div>
         </section>
@@ -407,6 +407,14 @@ function getDesktopMethod<K extends keyof DesktopApi>(name: K): DesktopApi[K] {
     throw new Error(`桌面主进程尚未加载 ${String(name)} 接口，请完全退出并重新启动桌面版。`)
   }
   return method.bind(api) as DesktopApi[K]
+}
+
+function pasteStatusMessage(result: PasteReplyResult) {
+  if (result.paste_action === 'filled_verified') return '已填入并校验，请在微信中检查后手动发送'
+  if (result.paste_action === 'filled_unverified') return '已填入但无法自动校验，请人工检查'
+  if (result.target_status === 'not_found') return '未找到目标微信群，已复制到剪贴板'
+  if (result.input_status === 'not_empty') return '输入框已有内容，未覆盖'
+  return result.message
 }
 
 function errorMessage(error: unknown) {

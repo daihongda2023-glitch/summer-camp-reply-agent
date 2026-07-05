@@ -254,17 +254,42 @@ class FakePasteAdapter:
         self.pasted = []
         self.sent = []
 
-    def paste_to_foreground(self, text):
+    def paste_to_foreground(self, text, target_group_name=""):
         from summer_camp_agent.wechat_assisted_paste import PasteResult
 
         self.pasted.append(text)
-        return PasteResult("pasted", "已填入当前前台窗口，请在微信中确认后手动发送。", "微信")
+        return PasteResult(
+            "filled_verified",
+            "已填入并校验，请在微信中检查后手动发送。",
+            "测试群 - 微信",
+            target_found=True,
+            input_focused=True,
+            filled=True,
+            verified=True,
+            target_status="matched",
+            input_status="focused",
+            verification_status="matched",
+        )
 
-    def send_to_wechat_foreground(self, text):
+    def paste_to_wechat_foreground(self, text, target_group_name=""):
+        return self.paste_to_foreground(text, target_group_name)
+
+    def send_to_wechat_foreground(self, text, target_group_name=""):
         from summer_camp_agent.wechat_assisted_paste import PasteResult
 
         self.sent.append(text)
-        return PasteResult("sent", "已自动发送到微信。", "微信")
+        return PasteResult(
+            "filled_verified",
+            "已填入并校验，请在微信中检查后手动发送。",
+            "测试群 - 微信",
+            target_found=True,
+            input_focused=True,
+            filled=True,
+            verified=True,
+            target_status="matched",
+            input_status="focused",
+            verification_status="matched",
+        )
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
@@ -495,7 +520,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
         self.assertNotEqual(payload["items"][0]["status"], "未触发")
         self.assertEqual(payload["items"][0]["matched_keywords"], ["测试"])
 
-    def test_paste_reply_logs_paste_but_not_confirmed_sent(self):
+    def test_paste_reply_logs_fill_but_not_confirmed_sent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
@@ -504,12 +529,15 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
             result = state.paste_reply(item["event_id"], item["reply"])
 
-            self.assertEqual(result["paste_action"], "pasted")
+            self.assertEqual(result["paste_action"], "filled_verified")
+            self.assertEqual(result["target_status"], "matched")
+            self.assertEqual(result["input_status"], "focused")
+            self.assertEqual(result["verification_status"], "matched")
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
-            self.assertIn("pasted_to_wechat", log_text)
+            self.assertIn("filled_verified", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
 
-    def test_paste_reply_auto_send_mode_records_auto_sent(self):
+    def test_paste_reply_auto_send_mode_still_requires_operator_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(
@@ -535,10 +563,12 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
             result = state.paste_reply(item["event_id"], item["reply"])
 
-            self.assertEqual(result["paste_action"], "sent")
-            self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+            self.assertEqual(result["paste_action"], "filled_verified")
+            self.assertEqual(state.paste_adapter.pasted, [item["reply"]])
+            self.assertEqual(state.paste_adapter.sent, [])
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
-            self.assertIn("auto_sent_to_wechat", log_text)
+            self.assertIn("filled_verified", log_text)
+            self.assertNotIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
 
     def test_confirm_sent_records_operator_confirmation(self):
@@ -579,7 +609,10 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-        self.assertEqual(payload["paste_action"], "pasted")
+        self.assertEqual(payload["paste_action"], "filled_verified")
+        self.assertEqual(payload["target_status"], "matched")
+        self.assertEqual(payload["input_status"], "focused")
+        self.assertEqual(payload["verification_status"], "matched")
         self.assertIn("手动发送", payload["message"])
 
     def test_list_items_polls_running_listener_and_deduplicates_events(self):

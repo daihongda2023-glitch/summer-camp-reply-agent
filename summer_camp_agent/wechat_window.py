@@ -5,6 +5,7 @@ import ctypes.wintypes
 from dataclasses import dataclass
 import struct
 import sys
+import time
 from typing import Callable
 
 
@@ -25,6 +26,25 @@ def is_wechat_window_title(title: str) -> bool:
     return value == "微信" or value.endswith(" - 微信") or value.endswith("- 微信")
 
 
+def enable_process_dpi_awareness() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        return
+
+
 class WindowsWeChatWindowBackend:
     """定位普通微信窗口，并按窗口矩形截取一张 BMP 图像。"""
 
@@ -36,10 +56,13 @@ class WindowsWeChatWindowBackend:
         self.user32 = ctypes.windll.user32 if sys.platform == "win32" else None
         self.gdi32 = ctypes.windll.gdi32 if sys.platform == "win32" else None
         if sys.platform == "win32":
+            enable_process_dpi_awareness()
             self._configure_win32_api()
 
     def _configure_win32_api(self) -> None:
         self.user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        self.user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        self.user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
         self.user32.GetWindowTextLengthW.argtypes = [ctypes.wintypes.HWND]
         self.user32.GetWindowTextLengthW.restype = ctypes.c_int
         self.user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]
@@ -93,6 +116,7 @@ class WindowsWeChatWindowBackend:
         if not hwnd:
             return WeChatWindowCapture("not_found", "未找到可见的微信窗口，请先打开微信 PC。")
 
+        self.prepare_window_for_capture(hwnd)
         screenshot = self.capture_window(hwnd)
         if not screenshot:
             return WeChatWindowCapture("error", "已找到微信窗口，但截图失败。", window_title=title)
@@ -146,6 +170,15 @@ class WindowsWeChatWindowBackend:
         rect = ctypes.wintypes.RECT()
         self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
         return rect.left, rect.top, rect.right, rect.bottom
+
+    def prepare_window_for_capture(self, hwnd: int) -> None:
+        if not hwnd:
+            return
+        active_hwnd = int(self.user32.GetForegroundWindow() or 0)
+        if active_hwnd == hwnd:
+            return
+        self.user32.SetForegroundWindow(hwnd)
+        time.sleep(0.12)
 
     def capture_window(self, hwnd: int) -> bytes:
         left, top, right, bottom = self.window_rect(hwnd)

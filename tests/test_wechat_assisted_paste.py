@@ -4,19 +4,38 @@ import sys
 import unittest
 
 from summer_camp_agent.wechat_assisted_paste import AssistedPasteAdapter, PasteResult, WindowsPasteBackend
+from summer_camp_agent.wechat_compose import ComposeInput, ComposeTarget
 
 
 class FakeBackend:
-    def __init__(self, can_paste=True):
+    def __init__(self, can_paste=True, target_status="matched", input_candidate=None, read_after_paste="同学你好"):
         self.can_paste = can_paste
+        self.target_status = target_status
+        self.input_candidate = input_candidate if input_candidate is not None else ComposeInput(status="found", existing_text="", can_read=True)
+        self.read_after_paste = read_after_paste
         self.clipboard_text = ""
         self.shortcuts = []
+        self.focused = False
 
     def set_clipboard_text(self, text):
         self.clipboard_text = text
 
     def foreground_window_title(self):
         return "微信"
+
+    def find_target_window(self, target_group_name):
+        if self.target_status == "matched":
+            return ComposeTarget(status="matched", hwnd=100, title="微信")
+        return ComposeTarget(status=self.target_status, hwnd=0, title="")
+
+    def find_compose_input(self, target):
+        return self.input_candidate
+
+    def focus_compose_input(self, target, compose_input):
+        if compose_input.status == "found":
+            self.focused = True
+            return True
+        return False
 
     def send_ctrl_v(self):
         if not self.can_paste:
@@ -27,6 +46,9 @@ class FakeBackend:
         if not self.can_paste:
             raise OSError("send failed")
         self.shortcuts.append("ENTER")
+
+    def read_compose_text(self, compose_input):
+        return self.read_after_paste
 
 
 class WechatAssistedPasteTest(unittest.TestCase):
@@ -88,6 +110,9 @@ class NonWechatBackend(FakeBackend):
     def foreground_window_title(self):
         return "Visual Studio Code"
 
+    def find_target_window(self, target_group_name):
+        return ComposeTarget(status="not_found", hwnd=0, title="")
+
 
 class WechatCheckedPasteTest(unittest.TestCase):
     def test_checked_paste_downgrades_when_foreground_is_not_wechat(self):
@@ -98,23 +123,25 @@ class WechatCheckedPasteTest(unittest.TestCase):
         self.assertEqual(result.action, "copied")
         self.assertEqual(backend.clipboard_text, "同学你好")
         self.assertEqual(backend.shortcuts, [])
-        self.assertIn("请切回微信", result.message)
+        self.assertEqual(result.target_status, "not_found")
+        self.assertEqual(result.fallback_reason, "target_chat_not_found")
+        self.assertIn("未找到目标微信群", result.message)
 
     def test_checked_paste_allows_wechat_foreground(self):
         backend = FakeBackend()
 
         result = AssistedPasteAdapter(backend).paste_to_wechat_foreground("同学你好")
 
-        self.assertEqual(result.action, "pasted")
+        self.assertEqual(result.action, "filled_verified")
         self.assertEqual(backend.shortcuts, ["CTRL+V"])
 
-    def test_checked_auto_send_pastes_then_sends_enter_for_wechat_foreground(self):
+    def test_checked_auto_send_never_presses_enter_for_wechat_foreground(self):
         backend = FakeBackend()
 
         result = AssistedPasteAdapter(backend).send_to_wechat_foreground("同学你好")
 
-        self.assertEqual(result.action, "sent")
-        self.assertEqual(backend.shortcuts, ["CTRL+V", "ENTER"])
+        self.assertEqual(result.action, "filled_verified")
+        self.assertEqual(backend.shortcuts, ["CTRL+V"])
 
     def test_checked_auto_send_downgrades_when_foreground_is_not_wechat(self):
         backend = NonWechatBackend()

@@ -119,6 +119,10 @@ export interface ActionResult {
 export interface PasteReplyResult extends ActionResult {
   paste_action: string
   foreground_window_title: string
+  target_status: string
+  input_status: string
+  verification_status: string
+  fallback_reason: string
 }
 
 export interface VisionStatus {

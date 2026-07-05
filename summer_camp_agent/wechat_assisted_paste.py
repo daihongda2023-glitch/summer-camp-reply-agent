@@ -5,7 +5,7 @@ import ctypes.wintypes
 from dataclasses import dataclass
 import sys
 
-from .wechat_window import is_wechat_window_title
+from .wechat_compose import ComposeFillResult, WeChatComposeController, WindowsComposeBackend
 
 
 @dataclass(frozen=True)
@@ -13,11 +13,21 @@ class PasteResult:
     action: str
     message: str
     foreground_window_title: str = ""
+    target_found: bool = False
+    input_focused: bool = False
+    filled: bool = False
+    verified: bool = False
+    fallback_reason: str = ""
+    target_status: str = "unknown"
+    input_status: str = "unknown"
+    verification_status: str = "unverified"
 
 
 class AssistedPasteAdapter:
     def __init__(self, backend=None):
         self.backend = backend or WindowsPasteBackend()
+        compose_backend = self.backend if hasattr(self.backend, "find_target_window") else WindowsComposeBackend(self.backend)
+        self.compose_controller = WeChatComposeController(compose_backend)
 
     def copy_only(self, text: str) -> PasteResult:
         value = text.strip()
@@ -41,37 +51,28 @@ class AssistedPasteAdapter:
         except Exception:
             return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
 
-    def paste_to_wechat_foreground(self, text: str) -> PasteResult:
-        copied = self.copy_only(text)
-        if copied.action != "copied":
-            return copied
-        title = ""
-        try:
-            title = self.backend.foreground_window_title()
-            if not is_wechat_window_title(title):
-                return PasteResult("copied", "已复制到剪贴板。请切回微信 PC 输入框后手动粘贴。", title)
-            self.backend.send_ctrl_v()
-            return PasteResult("pasted", "已填入微信 PC 当前输入框，请确认后手动发送。", title)
-        except Exception:
-            return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
+    def paste_to_wechat_foreground(self, text: str, target_group_name: str = "") -> PasteResult:
+        return self._from_compose_result(
+            self.compose_controller.fill_reply(text, target_group_name=target_group_name)
+        )
 
-    def send_to_wechat_foreground(self, text: str) -> PasteResult:
-        copied = self.copy_only(text)
-        if copied.action != "copied":
-            return copied
-        title = ""
-        try:
-            title = self.backend.foreground_window_title()
-            if not is_wechat_window_title(title):
-                return PasteResult("copied", "已复制到剪贴板。请切回微信 PC 输入框后手动发送。", title)
-            self.backend.send_ctrl_v()
-        except Exception:
-            return PasteResult("copied", "已复制到剪贴板，但未能自动填入。请手动粘贴到微信输入框。", title)
-        try:
-            self.backend.send_enter()
-            return PasteResult("sent", "已自动发送到微信 PC。", title)
-        except Exception:
-            return PasteResult("pasted", "已填入微信 PC，但未能自动发送。请确认后手动发送。", title)
+    def send_to_wechat_foreground(self, text: str, target_group_name: str = "") -> PasteResult:
+        return self.paste_to_wechat_foreground(text, target_group_name=target_group_name)
+
+    def _from_compose_result(self, result: ComposeFillResult) -> PasteResult:
+        return PasteResult(
+            result.action,
+            result.message,
+            result.foreground_window_title,
+            target_found=result.target_found,
+            input_focused=result.input_focused,
+            filled=result.filled,
+            verified=result.verified,
+            fallback_reason=result.fallback_reason,
+            target_status=result.target_status,
+            input_status=result.input_status,
+            verification_status=result.verification_status,
+        )
 
 
 class WindowsPasteBackend:

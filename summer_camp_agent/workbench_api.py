@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime
+import inspect
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -10,7 +11,7 @@ from urllib.parse import urlparse
 from .chat_log_sanitizer import hash_identifier
 from .desktop_settings import DesktopSettings, DesktopSettingsStore
 from .wechat_assisted_paste import AssistedPasteAdapter
-from .wechat_bridge_config import DEFAULT_GROUP_NAME, SEND_MODE_AUTO_SEND, WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
 from .wechat_vision import VisionState, WeChatVisionObserver
 from .wechat_window import WindowsWeChatWindowBackend
@@ -272,28 +273,48 @@ class WorkbenchApiState:
 
     def paste_reply(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
-        if self.wechat_config.send_mode == SEND_MODE_AUTO_SEND:
-            action = "auto_send"
-            send_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
-            if send_method is None:
-                send_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
-            result = send_method(reply)
-        else:
-            action = "paste"
-            paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
-            result = paste_method(reply)
-        operator_action = {
-            "sent": "auto_sent_to_wechat",
-            "pasted": "pasted_to_wechat",
-            "copied": "copied_to_clipboard",
-        }.get(result.action, "paste_failed")
+        action = "paste"
+        paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
+        result = self._call_paste_method(paste_method, reply)
+        operator_action = self._operator_action_for_paste_result(result)
         self.session.record_operator_action(item, reply, operator_action=operator_action, action=action)
         return {
             "status": "ok",
             "paste_action": result.action,
             "message": result.message,
             "foreground_window_title": result.foreground_window_title,
+            "target_status": getattr(result, "target_status", "unknown"),
+            "input_status": getattr(result, "input_status", "unknown"),
+            "verification_status": getattr(result, "verification_status", "unverified"),
+            "fallback_reason": getattr(result, "fallback_reason", ""),
         }
+
+    def _call_paste_method(self, method: Any, reply: str) -> Any:
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return method(reply)
+        if "target_group_name" in signature.parameters:
+            return method(reply, target_group_name=self.wechat_config.group_name)
+        return method(reply)
+
+    def _operator_action_for_paste_result(self, result: Any) -> str:
+        action = getattr(result, "action", "")
+        fallback_reason = getattr(result, "fallback_reason", "")
+        fallback_actions = {
+            "target_chat_not_found",
+            "target_chat_ambiguous",
+            "input_not_found",
+            "input_not_empty",
+            "fill_failed",
+        }
+        if action in {"filled_verified", "filled_unverified"}:
+            return action
+        if fallback_reason in fallback_actions:
+            return fallback_reason
+        if action == "copied":
+            return "copied_to_clipboard"
+        return "fill_failed"
 
     def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
