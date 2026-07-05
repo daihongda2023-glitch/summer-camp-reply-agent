@@ -242,15 +242,16 @@ flowchart TD
 
 ## 第一版启动方式
 
-双击 `启动夏令营Agent.cmd` 后默认隐藏后台启动 WeFlow 和本地服务，并自动打开浏览器版 PC 端群聊答疑运营工作台。启动器不会保留可见 cmd/PowerShell 长驻窗口，关闭浏览器也不会停止后台服务。
+双击 `启动夏令营Agent.cmd` 后默认隐藏后台启动 WeFlow，并自动打开 Electron 桌面版 PC 端群聊答疑运营工作台。启动器不会保留可见 cmd/PowerShell 长驻窗口，关闭桌面窗口不会停止 WeFlow 后台服务。
 
 启动器会自动补齐 `%APPDATA%\weflow\WeFlow-config.json` 的本地 API 配置，并在写入前备份为 `WeFlow-config.agent-backup.json`。排障日志位置：
 
 - Agent 启动器：`data/agent_launcher.log`
-- 工作台进程：`data/workbench-web.out`、`data/workbench-web.err`
+- 桌面端进程：`data/desktop-electron.out`、`data/desktop-electron.err`
+- 桌面端渲染服务：`data/desktop-vite.out`、`data/desktop-vite.err`
 - WeFlow：`D:\github\WeFlow\weflow-dev.out`、`D:\github\WeFlow\weflow-dev.err`
 
-Tkinter 版工作台仍可通过 `python -m summer_camp_agent.workbench_gui` 启动；如果本机 Tcl/Tk 运行时不完整，使用默认浏览器版。旧的单轮对话验证能力仍可通过 `python -m summer_camp_agent.gui` 启动。
+Tkinter 版工作台仍可通过 `python -m summer_camp_agent.workbench_gui` 启动。旧的单轮对话验证能力仍可通过 `python -m summer_camp_agent.gui` 启动。
 
 ## 当前 MVP 可演示能力
 

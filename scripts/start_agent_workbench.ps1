@@ -8,16 +8,16 @@ try {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
 
+$POWERSHELL_EXE = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $launchLog = Join-Path $repoRoot 'data\agent_launcher.log'
 $weflowRoot = 'D:\github\WeFlow'
 $weflowHealthUrl = 'http://127.0.0.1:5031/api/v1/health'
 $weflowOutLog = Join-Path $weflowRoot 'weflow-dev.out'
 $weflowErrLog = Join-Path $weflowRoot 'weflow-dev.err'
-$workbenchOutLog = Join-Path $repoRoot 'data\workbench-web.out'
-$workbenchErrLog = Join-Path $repoRoot 'data\workbench-web.err'
+$desktopLauncher = Join-Path $repoRoot 'scripts\start_desktop_app.ps1'
 
 function Get-WorkbenchProcessIdsFromCommandLine {
-    $target = 'summer_camp_agent.workbench_web'
+    $target = 'summer_camp_agent.workbench_server'
     try {
         Get-CimInstance Win32_Process |
             Where-Object {
@@ -312,10 +312,10 @@ function Confirm-WorkbenchCodeVersion {
 
 $probe = @'
 from pathlib import Path
-import summer_camp_agent.workbench_web as workbench_web
+import summer_camp_agent.workbench_server as workbench_server
 
-print('module=' + str(Path(workbench_web.__file__).resolve()))
-print('decision_mapping=' + ('ok' if 'formatDecisionValue' in workbench_web.WORKBENCH_HTML else 'missing'))
+print('module=' + str(Path(workbench_server.__file__).resolve()))
+print('desktop_api=' + ('ok' if hasattr(workbench_server, 'create_server') else 'missing'))
 '@
     $probeOutput = & $PythonExe -B -c $probe 2>&1
     $probeExitCode = $LASTEXITCODE
@@ -325,26 +325,21 @@ print('decision_mapping=' + ('ok' if 'formatDecisionValue' in workbench_web.WORK
     if ($probeExitCode -ne 0) {
         throw "Failed to import the workbench module before launch. Probe exit code: $probeExitCode"
     }
-    if ($probeOutput -notcontains 'decision_mapping=ok') {
-        throw 'Workbench HTML mapping check failed. Please confirm the launcher is using the latest source code.'
+    if ($probeOutput -notcontains 'desktop_api=ok') {
+        throw 'Desktop API service check failed. Please confirm the launcher is using the latest source code.'
     }
 }
 
-function Start-AgentWorkbench {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$PythonExe
-    )
+function Start-DesktopApp {
+    if (-not (Test-Path -LiteralPath $desktopLauncher)) {
+        throw "Desktop launcher was not found: $desktopLauncher"
+    }
 
-    Write-Host "[Agent] Starting summer camp Agent workbench hidden. Logs: $workbenchOutLog / $workbenchErrLog"
-    $process = Start-Process -FilePath $PythonExe `
-        -ArgumentList @('-B', '-m', 'summer_camp_agent.workbench_web') `
+    Write-Host "[Agent] Starting desktop app: $desktopLauncher"
+    Start-Process -FilePath $POWERSHELL_EXE `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $desktopLauncher) `
         -WorkingDirectory $repoRoot `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $workbenchOutLog `
-        -RedirectStandardError $workbenchErrLog `
-        -PassThru
-    Write-Host "[Agent] Workbench process started: $($process.Id)"
+        -WindowStyle Hidden | Out-Null
 }
 
 $transcriptStarted = $false
@@ -364,8 +359,8 @@ try {
     $pythonExe = Resolve-PythonExe
     Write-Host "[Agent] Python: $pythonExe"
     Confirm-WorkbenchCodeVersion -PythonExe $pythonExe -RepoRoot $repoRoot
-    Start-AgentWorkbench -PythonExe $pythonExe
-    Write-Host '[Agent] Launcher completed. Background services will keep running.'
+    Start-DesktopApp
+    Write-Host '[Agent] Launcher completed. Desktop app and background services will keep running.'
 } catch {
     Write-Host "[Agent] Launcher failed: $($_.Exception.Message)"
     exit 1

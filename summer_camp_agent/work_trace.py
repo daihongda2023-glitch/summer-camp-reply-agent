@@ -33,3 +33,20 @@ class WorkTraceRecorder:
         }
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def load_work_trace(path: str | Path, limit: int = 200) -> list[dict[str, object]]:
+    source = Path(path)
+    if not source.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows[-limit:]

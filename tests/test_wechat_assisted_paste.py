@@ -67,5 +67,30 @@ class WechatAssistedPasteTest(unittest.TestCase):
         self.assertIsInstance(PasteResult("copied", "ok"), PasteResult)
 
 
+class NonWechatBackend(FakeBackend):
+    def foreground_window_title(self):
+        return "Visual Studio Code"
+
+
+class WechatCheckedPasteTest(unittest.TestCase):
+    def test_checked_paste_downgrades_when_foreground_is_not_wechat(self):
+        backend = NonWechatBackend()
+
+        result = AssistedPasteAdapter(backend).paste_to_wechat_foreground("同学你好")
+
+        self.assertEqual(result.action, "copied")
+        self.assertEqual(backend.clipboard_text, "同学你好")
+        self.assertEqual(backend.shortcuts, [])
+        self.assertIn("请切回微信", result.message)
+
+    def test_checked_paste_allows_wechat_foreground(self):
+        backend = FakeBackend()
+
+        result = AssistedPasteAdapter(backend).paste_to_wechat_foreground("同学你好")
+
+        self.assertEqual(result.action, "pasted")
+        self.assertEqual(backend.shortcuts, ["CTRL+V"])
+
+
 if __name__ == "__main__":
     unittest.main()

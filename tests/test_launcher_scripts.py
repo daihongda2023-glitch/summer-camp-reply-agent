@@ -10,19 +10,20 @@ class LauncherScriptsTest(unittest.TestCase):
         script = (ROOT / "scripts" / "start_agent_workbench.ps1").read_text(encoding="utf-8")
 
         self.assertIn("Stop-PreviousWorkbenchProcesses", script)
-        self.assertIn("summer_camp_agent.workbench_web", script)
+        self.assertIn("summer_camp_agent.workbench_server", script)
         self.assertIn("Name -like 'python*'", script)
         self.assertIn("Stop-Process", script)
         self.assertIn("netstat -ano", script)
         self.assertIn("8765..8799", script)
         self.assertIn("ProcessName -like 'python*'", script)
 
-    def test_powershell_launcher_logs_loaded_workbench_module(self):
+    def test_powershell_launcher_checks_desktop_api_module(self):
         script = (ROOT / "scripts" / "start_agent_workbench.ps1").read_text(encoding="utf-8")
 
         self.assertIn("Confirm-WorkbenchCodeVersion", script)
         self.assertIn("git -c safe.directory", script)
-        self.assertIn("formatDecisionValue", script)
+        self.assertIn("desktop_api=ok", script)
+        self.assertIn("workbench_server", script)
         self.assertIn("print('module='", script)
 
     def test_powershell_launcher_prepares_and_starts_weflow_hidden(self):
@@ -41,15 +42,14 @@ class LauncherScriptsTest(unittest.TestCase):
         self.assertIn("-WindowStyle Hidden", script)
         self.assertNotIn("-WindowStyle Minimized", script)
 
-    def test_powershell_launcher_starts_workbench_as_background_process(self):
+    def test_powershell_launcher_starts_desktop_app(self):
         script = (ROOT / "scripts" / "start_agent_workbench.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("Start-AgentWorkbench", script)
-        self.assertIn("RedirectStandardOutput", script)
-        self.assertIn("RedirectStandardError", script)
-        self.assertIn("workbench-web.out", script)
-        self.assertIn("workbench-web.err", script)
+        self.assertIn("Start-DesktopApp", script)
+        self.assertIn("start_desktop_app.ps1", script)
+        self.assertIn("Desktop app", script)
         self.assertNotIn("& $pythonExe -B -m summer_camp_agent.workbench_web", script)
+        self.assertNotIn("summer_camp_agent.workbench_web", script)
 
     def test_cmd_launcher_can_be_copied_to_desktop(self):
         launcher_paths = list(ROOT.glob("*Agent.cmd"))

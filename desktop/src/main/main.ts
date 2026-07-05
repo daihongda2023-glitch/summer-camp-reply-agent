@@ -2,7 +2,19 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AppSettingsPayload, AppStatus, DesktopSettings } from '../shared/types'
+import type {
+  ActionResult,
+  AppSettingsPayload,
+  AppSettingsUpdate,
+  AppStatus,
+  DesktopSettings,
+  PasteReplyResult,
+  VisionCapturePayload,
+  VisionStatus,
+  WorkbenchItemPayload,
+  WorkbenchItemsPayload,
+  WorkTracePayload
+} from '../shared/types'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..', '..')
@@ -91,16 +103,71 @@ class PythonService {
     return this.request<AppSettingsPayload>('/api/app/settings')
   }
 
-  async saveSettings(settings: Partial<DesktopSettings>): Promise<AppSettingsPayload> {
+  async saveSettings(settings: AppSettingsUpdate): Promise<AppSettingsPayload> {
     await this.ensureStarted()
     return this.request<AppSettingsPayload>('/api/app/settings', settings)
+  }
+
+  async getWorkTrace(): Promise<WorkTracePayload> {
+    await this.ensureStarted()
+    return this.request<WorkTracePayload>('/api/app/work-trace')
+  }
+
+  async loadDemo(): Promise<void> {
+    await this.ensureStarted()
+    await this.request('/api/demo')
+  }
+
+  async getItems(): Promise<WorkbenchItemsPayload> {
+    await this.ensureStarted()
+    return this.request<WorkbenchItemsPayload>('/api/items')
+  }
+
+  async ask(question: string): Promise<WorkbenchItemPayload> {
+    await this.ensureStarted()
+    return this.request<WorkbenchItemPayload>('/api/ask', { question })
+  }
+
+  async pasteReply(eventId: string, reply: string): Promise<PasteReplyResult> {
+    await this.ensureStarted()
+    return this.request<PasteReplyResult>('/api/wechat/paste', { event_id: eventId, reply })
+  }
+
+  async confirmSent(eventId: string, reply: string): Promise<ActionResult> {
+    await this.ensureStarted()
+    return this.request<ActionResult>('/api/wechat/confirm-sent', { event_id: eventId, reply })
+  }
+
+  async saveCandidate(eventId: string, reply: string): Promise<ActionResult> {
+    await this.ensureStarted()
+    return this.request<ActionResult>('/api/save-candidate', { event_id: eventId, reply })
+  }
+
+  async startVision(): Promise<VisionCapturePayload> {
+    await this.ensureStarted()
+    return this.request<VisionCapturePayload>('/api/vision/start', {})
+  }
+
+  async stopVision(): Promise<VisionCapturePayload> {
+    await this.ensureStarted()
+    return this.request<VisionCapturePayload>('/api/vision/stop', {})
+  }
+
+  async captureVision(): Promise<VisionCapturePayload> {
+    await this.ensureStarted()
+    return this.request<VisionCapturePayload>('/api/vision/capture', {})
+  }
+
+  async getVisionStatus(): Promise<VisionStatus> {
+    await this.ensureStarted()
+    return this.request<VisionStatus>('/api/vision/status')
   }
 
   private captureOutput(text: string): void {
     for (const line of text.split(/\r?\n/)) {
       if (!line.trim()) continue
-      if (line.startsWith('WORKBENCH_URL=')) {
-        this.baseUrl = line.slice('WORKBENCH_URL='.length).trim()
+      if (line.startsWith('WORKBENCH_API_URL=')) {
+        this.baseUrl = line.slice('WORKBENCH_API_URL='.length).trim()
         this.status = 'running'
       }
       this.pushLog(line)
@@ -191,7 +258,18 @@ app.whenReady().then(() => {
   ipcMain.handle('app:start', () => service.startEngine())
   ipcMain.handle('app:stop', () => service.stopEngine())
   ipcMain.handle('app:getSettings', () => service.getSettings())
-  ipcMain.handle('app:saveSettings', (_event, settings: Partial<DesktopSettings>) => service.saveSettings(settings))
+  ipcMain.handle('app:saveSettings', (_event, settings: AppSettingsUpdate) => service.saveSettings(settings))
+  ipcMain.handle('app:getWorkTrace', () => service.getWorkTrace())
+  ipcMain.handle('app:loadDemo', () => service.loadDemo())
+  ipcMain.handle('workbench:getItems', () => service.getItems())
+  ipcMain.handle('workbench:ask', (_event, question: string) => service.ask(question))
+  ipcMain.handle('workbench:pasteReply', (_event, eventId: string, reply: string) => service.pasteReply(eventId, reply))
+  ipcMain.handle('workbench:confirmSent', (_event, eventId: string, reply: string) => service.confirmSent(eventId, reply))
+  ipcMain.handle('workbench:saveCandidate', (_event, eventId: string, reply: string) => service.saveCandidate(eventId, reply))
+  ipcMain.handle('vision:start', () => service.startVision())
+  ipcMain.handle('vision:stop', () => service.stopVision())
+  ipcMain.handle('vision:capture', () => service.captureVision())
+  ipcMain.handle('vision:getStatus', () => service.getVisionStatus())
   ipcMain.handle('settings:open', () => {
     if (!settingsWindow || settingsWindow.isDestroyed()) settingsWindow = createWindow('settings')
     if (settingsWindow.isMinimized()) settingsWindow.restore()

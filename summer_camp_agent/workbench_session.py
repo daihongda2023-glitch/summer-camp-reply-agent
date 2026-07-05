@@ -24,6 +24,7 @@ from .work_trace import WorkTraceRecorder, WorkTraceStep
 
 DEFAULT_CANDIDATE_PATH = Path(__file__).resolve().parents[1] / "data" / "reply_candidates.jsonl"
 DEFAULT_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "reply_logs.jsonl"
+DEFAULT_TRACE_PATH = Path(__file__).resolve().parents[1] / "data" / "work_trace.jsonl"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,11 @@ class WorkbenchSession:
         self.candidate_store = ReplyCandidateStore(candidate_path)
         self.log_store = ReplyLogStore(log_path)
         self.trace_recorder = WorkTraceRecorder(trace_path) if trace_path is not None else None
+
+    def update_group_config(self, group_config: GroupConfig) -> None:
+        self.group_config = group_config
+        self.trigger_engine = TriggerEngine(group_config)
+        self.reply_modes = ReplyModeController(group_config)
 
     def process_event(self, event: ChatEvent) -> WorkbenchItem:
         trigger = self.trigger_engine.decide(event)

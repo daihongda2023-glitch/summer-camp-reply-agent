@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.work_trace import WorkTraceRecorder, WorkTraceStep
+from summer_camp_agent.work_trace import WorkTraceRecorder, WorkTraceStep, load_work_trace
 
 
 class WorkTraceRecorderTest(unittest.TestCase):
@@ -34,6 +34,24 @@ class WorkTraceRecorderTest(unittest.TestCase):
         self.assertEqual(rows[0]["details"], {"confidence": 0.96})
         self.assertIn("trace_id", rows[0])
         self.assertIn("created_at", rows[0])
+
+    def test_load_work_trace_returns_recent_valid_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "work_trace.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"trace_id": "old", "phase": "observe"}, ensure_ascii=False),
+                        "not-json",
+                        json.dumps({"trace_id": "new", "phase": "act"}, ensure_ascii=False),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            rows = load_work_trace(path, limit=1)
+
+        self.assertEqual(rows, [{"trace_id": "new", "phase": "act"}])
 
 
 if __name__ == "__main__":

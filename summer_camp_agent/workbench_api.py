@@ -1,0 +1,528 @@
+﻿from __future__ import annotations
+
+from datetime import datetime
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+from .chat_log_sanitizer import hash_identifier
+from .desktop_settings import DesktopSettings, DesktopSettingsStore
+from .wechat_assisted_paste import AssistedPasteAdapter
+from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_live_listener import WeFlowLiveListener
+from .wechat_vision import VisionState, WeChatVisionObserver
+from .wechat_window import WindowsWeChatWindowBackend
+from .weflow_import import WeFlowImportClient, WeFlowImportConfig, fetch_weflow_messages
+from .workbench_models import ChatEvent, GroupConfig
+from .workbench_presenter import build_demo_events, format_item_summary, status_label
+from .work_trace import load_work_trace
+from .workbench_session import DEFAULT_CANDIDATE_PATH, DEFAULT_LOG_PATH, DEFAULT_TRACE_PATH, WorkbenchItem, WorkbenchSession
+from .workbench_sources import load_events_from_jsonl_text
+
+
+class WorkbenchApiState:
+    def __init__(
+        self,
+        candidate_path: str | Path = DEFAULT_CANDIDATE_PATH,
+        log_path: str | Path = DEFAULT_LOG_PATH,
+        trace_path: str | Path | None = None,
+        group_config: GroupConfig | None = None,
+        wechat_config_path: str | Path | None = None,
+        desktop_settings_path: str | Path | None = None,
+    ):
+        self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
+        self.trace_path = Path(trace_path) if trace_path is not None else self._default_trace_path(candidate_path)
+        self.session = WorkbenchSession(
+            self.group_config,
+            candidate_path=candidate_path,
+            log_path=log_path,
+            trace_path=self.trace_path,
+        )
+        self.items: list[WorkbenchItem] = []
+        self.wechat_config_store = WeChatBridgeConfigStore(wechat_config_path) if wechat_config_path else WeChatBridgeConfigStore()
+        self.wechat_config = self.wechat_config_store.load()
+        self._sync_group_config_from_wechat()
+        self.wechat_listener = None
+        self.wechat_listener_running = False
+        self.paste_adapter = AssistedPasteAdapter()
+        self.desktop_settings_store = (
+            DesktopSettingsStore(desktop_settings_path) if desktop_settings_path else DesktopSettingsStore()
+        )
+        self.desktop_settings = self.desktop_settings_store.load()
+        self.app_running = False
+        self.recent_logs: list[str] = []
+        self.vision_observer = WeChatVisionObserver()
+        self.vision_window_backend = WindowsWeChatWindowBackend()
+        self.vision_window_title = "微信"
+
+    def get_app_status(self) -> dict[str, Any]:
+        return {
+            "engine": {
+                "status": "running" if self.app_running else "idle",
+                "listener_running": self.wechat_listener_running,
+                "group_name": self.wechat_config.group_name,
+            },
+            "settings": self.desktop_settings.to_dict(),
+            "recent_logs": self.recent_logs[-20:],
+        }
+
+    def start_app(self) -> dict[str, Any]:
+        self.app_running = True
+        self.recent_logs.append("桌面控制器已启动")
+        return self.get_app_status()
+
+    def stop_app(self) -> dict[str, Any]:
+        self.app_running = False
+        self.wechat_listener_running = False
+        self.recent_logs.append("桌面控制器已停止")
+        return self.get_app_status()
+
+    def get_app_settings(self) -> dict[str, Any]:
+        self.desktop_settings = self.desktop_settings_store.load()
+        return {
+            "settings": self.desktop_settings.to_dict(),
+            "wechat": self.wechat_config.to_dict(),
+            "reply": {
+                "mode": self.group_config.mode,
+                "auto_reply_intents": self.group_config.auto_reply_intents,
+                "daily_auto_reply_limit": self.group_config.daily_auto_reply_limit,
+            },
+        }
+
+    def update_app_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings = DesktopSettings.from_dict(payload)
+        self.desktop_settings_store.save(settings)
+        self.desktop_settings = settings
+        if isinstance(payload.get("wechat"), dict):
+            self.wechat_config = WeChatBridgeConfig.from_dict(payload["wechat"])
+            self.wechat_config_store.save(self.wechat_config)
+            self._sync_group_config_from_wechat()
+            self._refresh_wechat_listener_if_running()
+            self._reprocess_items()
+        if isinstance(payload.get("reply"), dict):
+            reply = payload["reply"]
+            self._set_group_config(
+                GroupConfig(
+                    group_name=self.group_config.group_name,
+                    group_id_hash=self.group_config.group_id_hash,
+                    enabled=self.group_config.enabled,
+                    mode=str(reply.get("mode") or self.group_config.mode),
+                    keywords=[*self.group_config.keywords],
+                    agent_mentions=[*self.group_config.agent_mentions],
+                    auto_reply_intents=[
+                        str(item).strip()
+                        for item in reply.get("auto_reply_intents", self.group_config.auto_reply_intents)
+                        if str(item).strip()
+                    ],
+                    daily_auto_reply_limit=int(reply.get("daily_auto_reply_limit") or self.group_config.daily_auto_reply_limit),
+                )
+            )
+        self.recent_logs.append("桌面设置已保存")
+        return self.get_app_settings()
+
+    def load_demo_items(self) -> dict[str, Any]:
+        self.items = [self.session.process_event(event) for event in build_demo_events()]
+        return self.list_items()
+
+    def import_jsonl_text(self, text: str) -> dict[str, Any]:
+        self.items = [self.session.process_event(event) for event in load_events_from_jsonl_text(text)]
+        return self.list_items()
+
+    def import_weflow_group(
+        self,
+        group_name: str,
+        *,
+        client: WeFlowImportClient | None = None,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        active_group_name = group_name.strip()
+        if not active_group_name:
+            raise ValueError("群聊名称不能为空")
+        config = WeFlowImportConfig(
+            group_name=active_group_name,
+            keywords=[],
+            limit=5000,
+            base_url=self.wechat_config.base_url,
+            token_env=self.wechat_config.token_env,
+        )
+        fetched = fetch_weflow_messages(config, client=client, token=token)
+        self._set_group_config(
+            GroupConfig(
+                group_name=fetched.group_name,
+                group_id_hash=self.group_config.group_id_hash,
+                enabled=self.group_config.enabled,
+                mode=self.group_config.mode,
+                keywords=[*self.group_config.keywords],
+                agent_mentions=[*self.group_config.agent_mentions],
+                auto_reply_intents=[*self.group_config.auto_reply_intents],
+                daily_auto_reply_limit=self.group_config.daily_auto_reply_limit,
+            )
+        )
+        self.items = [
+            self.session.process_event(
+                ChatEvent(
+                    event_id=message.platform_message_id_hash,
+                    group_id_hash=message.group_id_hash,
+                    group_name=message.group_name,
+                    sender_alias=message.sender_alias,
+                    sender_role=message.sender_role,
+                    message_time=message.message_time,
+                    content=message.content,
+                    raw_type=str(message.raw_type),
+                    source=message.source,
+                )
+            )
+            for message in fetched.messages
+        ]
+        return {
+            "status": "ok",
+            "message": f"已从 WeFlow 导入 {len(self.items)} 条聊天记录：{fetched.group_name}",
+            "items": [serialize_item(item) for item in self.items],
+        }
+
+    def list_items(self) -> dict[str, Any]:
+        return {"items": [serialize_item(item) for item in self.items]}
+
+    def list_work_trace(self) -> dict[str, Any]:
+        rows = load_work_trace(self.trace_path)
+        event_ids = {item.event.event_id for item in self.items}
+        active_rows = [row for row in rows if not event_ids or str(row.get("event_id") or "") in event_ids]
+        return {
+            "trace": active_rows,
+            "summary": {
+                "total": len(active_rows),
+                "observed": sum(1 for row in active_rows if row.get("phase") == "observe"),
+                "thought": sum(1 for row in active_rows if row.get("phase") == "think"),
+                "acted": sum(1 for row in active_rows if row.get("phase") == "act"),
+            },
+        }
+
+    def ask(self, question: str) -> dict[str, Any]:
+        content = question.strip()
+        if not content:
+            raise ValueError("问题不能为空")
+        event = ChatEvent(
+            event_id=hash_identifier(f"{datetime.now().isoformat()}:{content}"),
+            group_id_hash="sha256:web-manual",
+            group_name=self.group_config.group_name,
+            sender_alias="手动输入",
+            sender_role="student",
+            message_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            content=content,
+            raw_type="text",
+            source="web_manual",
+        )
+        item = self.session.process_event(event)
+        self.items.append(item)
+        return {"item": serialize_item(item), "items": [serialize_item(value) for value in self.items]}
+
+    def send_reply(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        self.session.confirm_reply(item, reply)
+        return {"status": "ok", "message": "已记录发送动作"}
+
+    def save_candidate(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        if not self.session.save_candidate(item, reply):
+            raise ValueError("候选回复不能为空")
+        return {"status": "ok", "message": "已保存到待审核候选库"}
+
+    def configure_wechat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.wechat_config = WeChatBridgeConfig.from_dict(payload)
+        self.wechat_config_store.save(self.wechat_config)
+        self._sync_group_config_from_wechat()
+        self._refresh_wechat_listener_if_running()
+        self._reprocess_items()
+        return {
+            "status": "ok",
+            "message": "配置已保存",
+            "config": self.wechat_config.to_dict(),
+            "items": [serialize_item(item) for item in self.items],
+        }
+
+    def get_wechat_config(self) -> dict[str, Any]:
+        return {"config": self.wechat_config.to_dict()}
+
+    def start_wechat_listener(self) -> dict[str, Any]:
+        self.wechat_listener = WeFlowLiveListener(self.wechat_config)
+        self.wechat_listener_running = True
+        return {
+            "status": "ok",
+            "message": "已开始监听",
+            "listener_state": {"running": True, "group_name": self.wechat_config.group_name},
+        }
+
+    def stop_wechat_listener(self) -> dict[str, str]:
+        self.wechat_listener_running = False
+        return {"status": "ok", "message": "已停止监听"}
+
+    def poll_wechat_once(self) -> dict[str, Any]:
+        if self.wechat_listener is None:
+            return {"status": "error", "message": "请先开始监听", "items": [serialize_item(item) for item in self.items]}
+        result = self.wechat_listener.poll_once()
+        if result.status == "ok":
+            for event in result.events:
+                self.items.append(self.session.process_event(event))
+        return {"status": result.status, "message": result.message, "items": [serialize_item(item) for item in self.items]}
+
+    def paste_reply(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
+        result = paste_method(reply)
+        operator_action = {
+            "pasted": "pasted_to_wechat",
+            "copied": "copied_to_clipboard",
+        }.get(result.action, "paste_failed")
+        self.session.record_operator_action(item, reply, operator_action=operator_action, action="paste")
+        return {
+            "status": "ok",
+            "paste_action": result.action,
+            "message": result.message,
+            "foreground_window_title": result.foreground_window_title,
+        }
+
+    def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
+        item = self._find_item(event_id)
+        self.session.confirm_operator_sent(item, reply)
+        return {"status": "ok", "message": "已记录运营确认发送"}
+
+    def get_vision_status(self) -> dict[str, Any]:
+        return serialize_vision_state(self.vision_observer.state)
+
+    def start_vision(self) -> dict[str, Any]:
+        self.vision_observer.start()
+        self.recent_logs.append("微信视觉观察器已启动")
+        return self.capture_vision_once()
+
+    def stop_vision(self) -> dict[str, Any]:
+        vision = self.vision_observer.stop()
+        self.recent_logs.append("微信视觉观察器已停止")
+        return {
+            "status": "ok",
+            "message": "微信视觉观察器已停止",
+            "items": [serialize_item(item) for item in self.items],
+            "vision": serialize_vision_state(vision),
+        }
+
+    def capture_vision_once(self) -> dict[str, Any]:
+        capture = self.vision_window_backend.capture_wechat_window()
+        if capture.status != "ok":
+            running = self.vision_observer.state.running
+            vision = VisionState(
+                running=running,
+                window_title=capture.window_title,
+                last_message=self.vision_observer.state.last_message,
+                last_error=capture.message,
+            )
+            self.vision_observer.state = vision
+            self.recent_logs.append(capture.message)
+            return {
+                "status": capture.status,
+                "message": capture.message,
+                "items": [serialize_item(item) for item in self.items],
+                "vision": serialize_vision_state(vision),
+            }
+
+        result = self.vision_observer.capture_once(
+            capture.screenshot,
+            window_title=capture.window_title,
+            group_name=self.group_config.group_name,
+        )
+        for event in result.events:
+            self.items.append(self.session.process_event(event))
+        self.recent_logs.append(result.message)
+        return {
+            "status": result.status,
+            "message": result.message,
+            "items": [serialize_item(item) for item in self.items],
+            "vision": serialize_vision_state(result.vision),
+        }
+
+    def _find_item(self, event_id: str) -> WorkbenchItem:
+        for item in self.items:
+            if item.event.event_id == event_id:
+                return item
+        raise ValueError("没有找到对应消息，请重新选择")
+
+    def _sync_group_config_from_wechat(self) -> None:
+        self._set_group_config(
+            GroupConfig(
+                group_name=self.wechat_config.group_name,
+                group_id_hash=self.group_config.group_id_hash,
+                enabled=self.wechat_config.enabled,
+                mode=self.group_config.mode,
+                keywords=[*self.wechat_config.keywords],
+                agent_mentions=[*self.group_config.agent_mentions],
+                auto_reply_intents=[*self.group_config.auto_reply_intents],
+                daily_auto_reply_limit=self.group_config.daily_auto_reply_limit,
+            )
+        )
+
+    def _set_group_config(self, group_config: GroupConfig) -> None:
+        self.group_config = group_config
+        self.session.update_group_config(group_config)
+
+    def _refresh_wechat_listener_if_running(self) -> None:
+        if self.wechat_listener_running:
+            self.wechat_listener = WeFlowLiveListener(self.wechat_config)
+
+    def _reprocess_items(self) -> None:
+        self.items = [self.session.process_event(item.event) for item in self.items]
+
+    def _default_trace_path(self, candidate_path: str | Path) -> Path:
+        candidate = Path(candidate_path)
+        if candidate == DEFAULT_CANDIDATE_PATH:
+            return DEFAULT_TRACE_PATH
+        return candidate.parent / "work_trace.jsonl"
+
+
+def serialize_item(item: WorkbenchItem) -> dict[str, Any]:
+    return {
+        "event_id": item.event.event_id,
+        "group_name": item.event.group_name,
+        "sender": item.event.sender_alias,
+        "message_time": item.event.message_time,
+        "question": item.event.content,
+        "source": item.event.source,
+        "summary": format_item_summary(item),
+        "status": status_label(item),
+        "mode": item.reply_decision.mode,
+        "reply": item.reply_decision.reply,
+        "trigger_reasons": item.trigger.reasons,
+        "matched_keywords": item.trigger.matched_keywords,
+        "recommendation": item.review_card.recommendation,
+        "engine_action": item.review_card.action,
+        "intent": item.review_card.intent,
+        "answer_source": item.review_card.source,
+        "confidence": item.review_card.confidence,
+        "reason": item.reply_decision.reason or item.review_card.reason,
+    }
+
+
+def serialize_vision_state(state: VisionState) -> dict[str, Any]:
+    return {
+        "running": state.running,
+        "window_title": state.window_title,
+        "last_message": state.last_message,
+        "last_error": state.last_error,
+    }
+
+
+def create_handler(state: WorkbenchApiState):
+    class WorkbenchRequestHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            path = urlparse(self.path).path
+            if path == "/":
+                self._send_json({"error": "桌面版已替代网页工作台"}, status=404)
+                return
+            if path == "/api/demo":
+                self._send_json(state.load_demo_items())
+                return
+            if path == "/api/items":
+                self._send_json(state.list_items())
+                return
+            if path == "/api/wechat/config":
+                self._send_json(state.get_wechat_config())
+                return
+            if path == "/api/app/status":
+                self._send_json(state.get_app_status())
+                return
+            if path == "/api/app/settings":
+                self._send_json(state.get_app_settings())
+                return
+            if path == "/api/app/work-trace":
+                self._send_json(state.list_work_trace())
+                return
+            if path == "/api/vision/status":
+                self._send_json(state.get_vision_status())
+                return
+            self._send_json({"error": "未找到接口"}, status=404)
+
+        def do_POST(self) -> None:
+            path = urlparse(self.path).path
+            try:
+                payload = self._read_json()
+                if path == "/api/ask":
+                    self._send_json(state.ask(str(payload.get("question") or "")))
+                    return
+                if path == "/api/import-jsonl":
+                    self._send_json(state.import_jsonl_text(str(payload.get("text") or "")))
+                    return
+                if path == "/api/import-weflow":
+                    self._send_json(state.import_weflow_group(str(payload.get("group_name") or "")))
+                    return
+                if path == "/api/send":
+                    self._send_json(state.send_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/save-candidate":
+                    self._send_json(
+                        state.save_candidate(str(payload.get("event_id") or ""), str(payload.get("reply") or ""))
+                    )
+                    return
+                if path == "/api/wechat/config":
+                    self._send_json(state.configure_wechat(payload))
+                    return
+                if path == "/api/wechat/start":
+                    self._send_json(state.start_wechat_listener())
+                    return
+                if path == "/api/wechat/stop":
+                    self._send_json(state.stop_wechat_listener())
+                    return
+                if path == "/api/wechat/poll":
+                    self._send_json(state.poll_wechat_once())
+                    return
+                if path == "/api/wechat/paste":
+                    self._send_json(state.paste_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/wechat/confirm-sent":
+                    self._send_json(state.confirm_sent(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/vision/start":
+                    self._send_json(state.start_vision())
+                    return
+                if path == "/api/vision/stop":
+                    self._send_json(state.stop_vision())
+                    return
+                if path == "/api/vision/capture":
+                    self._send_json(state.capture_vision_once())
+                    return
+                if path == "/api/app/start":
+                    self._send_json(state.start_app())
+                    return
+                if path == "/api/app/stop":
+                    self._send_json(state.stop_app())
+                    return
+                if path == "/api/app/settings":
+                    self._send_json(state.update_app_settings(payload))
+                    return
+                self._send_json({"error": "未找到接口"}, status=404)
+            except Exception as exc:  # noqa: BLE001 - local UI should surface friendly errors
+                self._send_json({"error": str(exc)}, status=400)
+
+        def _read_json(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length") or "0")
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length).decode("utf-8")
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError("请求体必须是 JSON 对象")
+            return value
+
+
+        def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: Any) -> None:
+            return
+
+    return WorkbenchRequestHandler
+
+

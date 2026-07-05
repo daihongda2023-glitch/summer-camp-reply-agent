@@ -4,6 +4,8 @@ import ctypes
 from dataclasses import dataclass
 import sys
 
+from .wechat_window import is_wechat_window_title
+
 
 @dataclass(frozen=True)
 class PasteResult:
@@ -35,6 +37,20 @@ class AssistedPasteAdapter:
             title = self.backend.foreground_window_title()
             self.backend.send_ctrl_v()
             return PasteResult("pasted", "已填入当前前台窗口，请在微信中确认后手动发送。", title)
+        except Exception:
+            return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
+
+    def paste_to_wechat_foreground(self, text: str) -> PasteResult:
+        copied = self.copy_only(text)
+        if copied.action != "copied":
+            return copied
+        title = ""
+        try:
+            title = self.backend.foreground_window_title()
+            if not is_wechat_window_title(title):
+                return PasteResult("copied", "已复制到剪贴板。请切回微信 PC 输入框后手动粘贴。", title)
+            self.backend.send_ctrl_v()
+            return PasteResult("pasted", "已填入微信 PC 当前输入框，请确认后手动发送。", title)
         except Exception:
             return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
 

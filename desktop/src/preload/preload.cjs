@@ -6,6 +6,17 @@ const desktopApi = {
   stop: () => ipcRenderer.invoke('app:stop'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('app:saveSettings', settings),
+  getWorkTrace: () => ipcRenderer.invoke('app:getWorkTrace'),
+  loadDemo: () => ipcRenderer.invoke('app:loadDemo'),
+  getItems: () => ipcRenderer.invoke('workbench:getItems'),
+  ask: (question) => ipcRenderer.invoke('workbench:ask', question),
+  pasteReply: (eventId, reply) => ipcRenderer.invoke('workbench:pasteReply', eventId, reply),
+  confirmSent: (eventId, reply) => ipcRenderer.invoke('workbench:confirmSent', eventId, reply),
+  saveCandidate: (eventId, reply) => ipcRenderer.invoke('workbench:saveCandidate', eventId, reply),
+  startVision: () => ipcRenderer.invoke('vision:start'),
+  stopVision: () => ipcRenderer.invoke('vision:stop'),
+  captureVision: () => ipcRenderer.invoke('vision:capture'),
+  getVisionStatus: () => ipcRenderer.invoke('vision:getStatus'),
   openSettings: () => ipcRenderer.invoke('settings:open'),
   openAdvanced: (page) => ipcRenderer.invoke('advanced:open', page)
 }
