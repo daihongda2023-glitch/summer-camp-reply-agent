@@ -26,7 +26,13 @@ const fallbackSettings: DesktopSettings = {
 }
 
 const fallbackStatus: AppStatus = {
-  engine: { status: 'idle', listener_running: false, group_name: '未连接' },
+  engine: {
+    status: 'idle',
+    listener_running: false,
+    group_name: '未连接',
+    send_mode: 'manual_confirm',
+    poll_interval_seconds: 5
+  },
   settings: fallbackSettings,
   recent_logs: ['引擎尚未启动']
 }
@@ -39,13 +45,15 @@ const fallbackWechatSettings: WeChatBridgeSettings = {
   keywords: ['报名', '报到', '住宿', '交通', '作业', '面试', 'GPU', '算子'],
   poll_interval_seconds: 5,
   enabled: true,
-  show_debug_config: false
+  show_debug_config: false,
+  send_mode: 'manual_confirm'
 }
 
 type WechatForm = {
   group_name: string
   keywordsText: string
   poll_interval_seconds: number
+  send_mode: string
 }
 
 function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
@@ -53,7 +61,8 @@ function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
   return {
     group_name: current.group_name,
     keywordsText: current.keywords.join(', '),
-    poll_interval_seconds: current.poll_interval_seconds
+    poll_interval_seconds: current.poll_interval_seconds,
+    send_mode: current.send_mode || 'manual_confirm'
   }
 }
 
@@ -155,6 +164,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   const [message, setMessage] = useState('桌面工作台已就绪')
   const [vision, setVision] = useState<VisionStatus>({ running: false, window_title: '', last_message: '', last_error: '' })
   const selected = itemsPayload.items.find((item) => item.event_id === selectedId) ?? itemsPayload.items[0]
+  const autoSend = status.engine.send_mode === 'auto_send'
 
   useEffect(() => {
     void refreshItems()
@@ -164,6 +174,12 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   useEffect(() => {
     if (selected) setReplyDraft(selected.reply || '')
   }, [selected?.event_id])
+
+  useEffect(() => {
+    if (!vision.running) return
+    const timer = window.setInterval(refreshItems, Math.max(2000, status.engine.poll_interval_seconds * 1000))
+    return () => window.clearInterval(timer)
+  }, [vision.running, status.engine.poll_interval_seconds])
 
   async function refreshItems() {
     try {
@@ -202,7 +218,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   }
 
   async function pasteReply() {
-    await runAction('正在填入微信...', async () => {
+    await runAction(autoSend ? '正在自动发送...' : '正在填入微信...', async () => {
       if (!selected) {
         setMessage('请先选择一条消息')
         return
@@ -366,8 +382,8 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
           </div>
           <textarea id="replyDraft" value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} />
           <div className="reply-actions">
-            <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
-            <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
+            <button className="primary-action compact" type="button" onClick={pasteReply}>{autoSend ? '自动发送' : '填入微信'}</button>
+            {!autoSend && <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>}
             <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
           </div>
         </section>
@@ -446,7 +462,8 @@ function SettingsWindow() {
         ...wechat,
         group_name: groupName,
         keywords,
-        poll_interval_seconds: pollSeconds
+        poll_interval_seconds: pollSeconds,
+        send_mode: wechatForm.send_mode
       }
     })
     setPayload(nextPayload)
@@ -501,6 +518,16 @@ function SettingsWindow() {
               />
               <span>秒</span>
             </div>
+          </Field>
+          <Field label="发送方式" htmlFor="wechatSendMode">
+            <select
+              id="wechatSendMode"
+              value={wechatForm.send_mode}
+              onChange={(event) => setWechatForm((current) => ({ ...current, send_mode: event.target.value }))}
+            >
+              <option value="manual_confirm">人工确认发送</option>
+              <option value="auto_send">系统自动发送</option>
+            </select>
           </Field>
           <ReadOnlyLine label="接口" value={String(payload?.wechat.base_url ?? 'http://127.0.0.1:5031')} />
           <button className="secondary-action" type="button" onClick={saveWechatSettings}>保存微信桥接</button>

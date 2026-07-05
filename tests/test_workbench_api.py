@@ -100,6 +100,7 @@ class WorkbenchApiTest(unittest.TestCase):
                         "poll_interval_seconds": 8,
                         "enabled": True,
                         "show_debug_config": False,
+                        "send_mode": "auto_send",
                     }
                 }
             )
@@ -112,8 +113,10 @@ class WorkbenchApiTest(unittest.TestCase):
         self.assertEqual(payload["wechat"]["group_name"], "宝宝守护群")
         self.assertEqual(payload["wechat"]["keywords"], ["报名", "住宿", "GPU"])
         self.assertEqual(payload["wechat"]["poll_interval_seconds"], 8)
+        self.assertEqual(payload["wechat"]["send_mode"], "auto_send")
         self.assertEqual(reloaded["wechat"]["group_name"], "宝宝守护群")
         self.assertEqual(reloaded["wechat"]["keywords"], ["报名", "住宿", "GPU"])
+        self.assertEqual(reloaded["wechat"]["send_mode"], "auto_send")
 
     def test_app_status_reflects_start_and_stop(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +130,7 @@ class WorkbenchApiTest(unittest.TestCase):
         self.assertEqual(idle["engine"]["status"], "idle")
         self.assertEqual(started["engine"]["status"], "running")
         self.assertEqual(stopped["engine"]["status"], "idle")
+        self.assertEqual(idle["engine"]["send_mode"], "manual_confirm")
 
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -248,12 +252,19 @@ class FakeWeFlowImportClient:
 class FakePasteAdapter:
     def __init__(self):
         self.pasted = []
+        self.sent = []
 
     def paste_to_foreground(self, text):
         from summer_camp_agent.wechat_assisted_paste import PasteResult
 
         self.pasted.append(text)
         return PasteResult("pasted", "已填入当前前台窗口，请在微信中确认后手动发送。", "微信")
+
+    def send_to_wechat_foreground(self, text):
+        from summer_camp_agent.wechat_assisted_paste import PasteResult
+
+        self.sent.append(text)
+        return PasteResult("sent", "已自动发送到微信。", "微信")
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
@@ -498,6 +509,38 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             self.assertIn("pasted_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
 
+    def test_paste_reply_auto_send_mode_records_auto_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+
+            result = state.paste_reply(item["event_id"], item["reply"])
+
+            self.assertEqual(result["paste_action"], "sent")
+            self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+            log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("auto_sent_to_wechat", log_text)
+            self.assertNotIn("operator_confirmed_sent", log_text)
+
     def test_confirm_sent_records_operator_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -538,6 +581,33 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
         self.assertEqual(payload["paste_action"], "pasted")
         self.assertIn("手动发送", payload["message"])
+
+    def test_list_items_polls_running_listener_and_deduplicates_events(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-live-refresh",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-06-21 10:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_listener = FakeListener([event])
+            state.wechat_listener_running = True
+
+            first = state.list_items()
+            second = state.list_items()
+
+        self.assertEqual(first["items"][0]["event_id"], "evt-live-refresh")
+        self.assertEqual(len(second["items"]), 1)
+        self.assertEqual(state.wechat_listener.poll_count, 2)
 
 
 class FakeVisionObserver:
@@ -598,6 +668,34 @@ class FakeVisionWindowBackend:
 
 
 class WorkbenchVisionApiTest(unittest.TestCase):
+    def test_start_vision_polls_weflow_messages_first(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-start-observe",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-02 20:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_listener = FakeListener([event])
+            state.vision_observer = FakeVisionObserver()
+            state.vision_window_backend = FakeVisionWindowBackend(status="not_found", message="不应先走截图识别")
+
+            payload = state.start_vision()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["items"][0]["event_id"], "evt-start-observe")
+        self.assertEqual(payload["items"][0]["source"], "weflow_live")
+        self.assertTrue(payload["vision"]["running"])
+
     def test_vision_capture_processes_events_into_items(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -643,6 +741,18 @@ class WorkbenchVisionApiTest(unittest.TestCase):
 
         self.assertTrue(started["vision"]["running"])
         self.assertFalse(stopped["vision"]["running"])
+
+    def test_stop_vision_stops_live_listener_refresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.vision_observer = FakeVisionObserver()
+            state.wechat_listener = FakeListener([])
+            state.wechat_listener_running = True
+
+            state.stop_vision()
+
+        self.assertFalse(state.wechat_listener_running)
 
 
 if __name__ == "__main__":

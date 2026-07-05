@@ -23,6 +23,11 @@ class FakeBackend:
             raise OSError("paste failed")
         self.shortcuts.append("CTRL+V")
 
+    def send_enter(self):
+        if not self.can_paste:
+            raise OSError("send failed")
+        self.shortcuts.append("ENTER")
+
 
 class WechatAssistedPasteTest(unittest.TestCase):
     def test_copy_only_rejects_empty_text(self):
@@ -57,12 +62,11 @@ class WechatAssistedPasteTest(unittest.TestCase):
         self.assertEqual(result.action, "copied")
         self.assertIn("已复制到剪贴板", result.message)
 
-    def test_module_does_not_send_enter_or_mouse_clicks(self):
+    def test_module_does_not_use_mouse_clicks(self):
         import summer_camp_agent.wechat_assisted_paste as module
 
         source = inspect.getsource(module).lower()
 
-        self.assertNotIn("vk_return", source)
         self.assertNotIn("mouseevent", source)
         self.assertNotIn("leftdown", source)
         self.assertNotIn("leftup", source)
@@ -103,6 +107,22 @@ class WechatCheckedPasteTest(unittest.TestCase):
 
         self.assertEqual(result.action, "pasted")
         self.assertEqual(backend.shortcuts, ["CTRL+V"])
+
+    def test_checked_auto_send_pastes_then_sends_enter_for_wechat_foreground(self):
+        backend = FakeBackend()
+
+        result = AssistedPasteAdapter(backend).send_to_wechat_foreground("同学你好")
+
+        self.assertEqual(result.action, "sent")
+        self.assertEqual(backend.shortcuts, ["CTRL+V", "ENTER"])
+
+    def test_checked_auto_send_downgrades_when_foreground_is_not_wechat(self):
+        backend = NonWechatBackend()
+
+        result = AssistedPasteAdapter(backend).send_to_wechat_foreground("同学你好")
+
+        self.assertEqual(result.action, "copied")
+        self.assertEqual(backend.shortcuts, [])
 
 
 if __name__ == "__main__":

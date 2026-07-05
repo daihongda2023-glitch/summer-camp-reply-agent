@@ -26,6 +26,7 @@ export interface WeChatBridgeSettings {
   poll_interval_seconds: number
   enabled: boolean
   show_debug_config: boolean
+  send_mode: string
 }
 
 export interface ReplySettings {
@@ -39,6 +40,8 @@ export interface AppStatus {
     status: EngineStatus
     listener_running: boolean
     group_name: string
+    send_mode: string
+    poll_interval_seconds: number
   }
   settings: DesktopSettings
   recent_logs: string[]

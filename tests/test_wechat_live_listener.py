@@ -102,6 +102,24 @@ class WeFlowLiveListenerTest(unittest.TestCase):
         self.assertEqual(second.events, [])
         self.assertEqual(second.status, "ok")
 
+    def test_poll_once_can_backfill_seen_unreplied_messages(self):
+        store = MemoryStateStore()
+        fake_client = FakeClient()
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="test group", keywords=["报名"]),
+            state_store=store,
+            client=fake_client,
+            token="fake-token",
+            clock=lambda: datetime.fromtimestamp(1781911320) + timedelta(minutes=1),
+        )
+
+        first = listener.poll_once()
+        second = listener.poll_once(include_seen=True)
+
+        self.assertEqual(len(first.events), 1)
+        self.assertEqual(len(second.events), 1)
+        self.assertEqual(second.events[0].event_id, first.events[0].event_id)
+
     def test_poll_once_requests_only_the_last_hour(self):
         now = datetime(2026, 6, 22, 12, 0, 0)
         fake_client = FakeClient()
@@ -151,6 +169,87 @@ class WeFlowLiveListenerTest(unittest.TestCase):
 
         self.assertEqual([event.content for event in result.events], ["报名入口在哪里？"])
         self.assertEqual(result.events[0].sender_alias, "成员001")
+
+    def test_poll_once_skips_message_replied_by_quote_context(self):
+        now = datetime(2026, 6, 22, 12, 0, 0)
+        question_timestamp = int((now - timedelta(minutes=20)).timestamp())
+        reply_timestamp = int((now - timedelta(minutes=10)).timestamp())
+        fake_client = FakeClient(
+            messages=[
+                {
+                    "sender": "student-a",
+                    "timestamp": question_timestamp,
+                    "type": 0,
+                    "content": "signup link?",
+                    "platformMessageId": "msg-question",
+                },
+                {
+                    "sender": "teacher",
+                    "timestamp": reply_timestamp,
+                    "type": 0,
+                    "content": "please use the official link",
+                    "platformMessageId": "msg-reply",
+                    "quoteMessageId": "msg-question",
+                },
+            ]
+        )
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="test group", keywords=["signup"]),
+            state_store=MemoryStateStore(),
+            client=fake_client,
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.events, [])
+
+    def test_poll_once_skips_message_replied_by_mentioning_sender(self):
+        now = datetime(2026, 6, 22, 12, 0, 0)
+        question_timestamp = int((now - timedelta(minutes=20)).timestamp())
+        reply_timestamp = int((now - timedelta(minutes=10)).timestamp())
+        open_timestamp = int((now - timedelta(minutes=5)).timestamp())
+        fake_client = FakeClient(
+            messages=[
+                {
+                    "sender": "student-a",
+                    "senderName": "Alice",
+                    "timestamp": question_timestamp,
+                    "type": 0,
+                    "content": "signup link?",
+                    "platformMessageId": "msg-replied",
+                },
+                {
+                    "sender": "teacher",
+                    "timestamp": reply_timestamp,
+                    "type": 0,
+                    "content": "@Alice please use the official link",
+                    "platformMessageId": "msg-mention-reply",
+                },
+                {
+                    "sender": "student-b",
+                    "senderName": "Bob",
+                    "timestamp": open_timestamp,
+                    "type": 0,
+                    "content": "signup deadline?",
+                    "platformMessageId": "msg-open",
+                },
+            ]
+        )
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="test group", keywords=["signup"]),
+            state_store=MemoryStateStore(),
+            client=fake_client,
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual([event.content for event in result.events], ["signup deadline?"])
 
     def test_poll_once_reports_missing_token(self):
         with tempfile.TemporaryDirectory() as directory:

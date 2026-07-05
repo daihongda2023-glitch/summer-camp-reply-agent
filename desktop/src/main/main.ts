@@ -80,7 +80,13 @@ class PythonService {
       }
     }
     return {
-      engine: { status: this.status, listener_running: false, group_name: '未连接' },
+      engine: {
+        status: this.status,
+        listener_running: false,
+        group_name: '未连接',
+        send_mode: 'manual_confirm',
+        poll_interval_seconds: 5
+      },
       settings: defaultSettings(),
       recent_logs: this.logs.slice(-20)
     }

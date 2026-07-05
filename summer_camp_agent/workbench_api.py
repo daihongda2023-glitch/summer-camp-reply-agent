@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from .chat_log_sanitizer import hash_identifier
 from .desktop_settings import DesktopSettings, DesktopSettingsStore
 from .wechat_assisted_paste import AssistedPasteAdapter
-from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_bridge_config import DEFAULT_GROUP_NAME, SEND_MODE_AUTO_SEND, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
 from .wechat_vision import VisionState, WeChatVisionObserver
 from .wechat_window import WindowsWeChatWindowBackend
@@ -63,6 +63,8 @@ class WorkbenchApiState:
                 "status": "running" if self.app_running else "idle",
                 "listener_running": self.wechat_listener_running,
                 "group_name": self.wechat_config.group_name,
+                "send_mode": self.wechat_config.send_mode,
+                "poll_interval_seconds": self.wechat_config.poll_interval_seconds,
             },
             "settings": self.desktop_settings.to_dict(),
             "recent_logs": self.recent_logs[-20:],
@@ -183,6 +185,8 @@ class WorkbenchApiState:
         }
 
     def list_items(self) -> dict[str, Any]:
+        if self.wechat_listener_running and self.wechat_listener is not None:
+            self._poll_wechat_listener()
         return {"items": [serialize_item(item) for item in self.items]}
 
     def list_work_trace(self) -> dict[str, Any]:
@@ -261,21 +265,29 @@ class WorkbenchApiState:
     def poll_wechat_once(self) -> dict[str, Any]:
         if self.wechat_listener is None:
             return {"status": "error", "message": "请先开始监听", "items": [serialize_item(item) for item in self.items]}
-        result = self.wechat_listener.poll_once()
+        result = self._call_wechat_listener(include_seen=True)
         if result.status == "ok":
-            for event in result.events:
-                self.items.append(self.session.process_event(event))
+            self._append_listener_events(result.events)
         return {"status": result.status, "message": result.message, "items": [serialize_item(item) for item in self.items]}
 
     def paste_reply(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
-        paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
-        result = paste_method(reply)
+        if self.wechat_config.send_mode == SEND_MODE_AUTO_SEND:
+            action = "auto_send"
+            send_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
+            if send_method is None:
+                send_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
+            result = send_method(reply)
+        else:
+            action = "paste"
+            paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
+            result = paste_method(reply)
         operator_action = {
+            "sent": "auto_sent_to_wechat",
             "pasted": "pasted_to_wechat",
             "copied": "copied_to_clipboard",
         }.get(result.action, "paste_failed")
-        self.session.record_operator_action(item, reply, operator_action=operator_action, action="paste")
+        self.session.record_operator_action(item, reply, operator_action=operator_action, action=action)
         return {
             "status": "ok",
             "paste_action": result.action,
@@ -292,12 +304,17 @@ class WorkbenchApiState:
         return serialize_vision_state(self.vision_observer.state)
 
     def start_vision(self) -> dict[str, Any]:
-        self.vision_observer.start()
+        vision = self.vision_observer.start()
+        if self.wechat_listener is None:
+            self.wechat_listener = WeFlowLiveListener(self.wechat_config)
+        self.wechat_listener_running = True
         self.recent_logs.append("微信视觉观察器已启动")
-        return self.capture_vision_once()
+        polled = self.poll_wechat_once()
+        return {**polled, "vision": serialize_vision_state(vision)}
 
     def stop_vision(self) -> dict[str, Any]:
         vision = self.vision_observer.stop()
+        self.wechat_listener_running = False
         self.recent_logs.append("微信视觉观察器已停止")
         return {
             "status": "ok",
@@ -370,6 +387,31 @@ class WorkbenchApiState:
 
     def _reprocess_items(self) -> None:
         self.items = [self.session.process_event(item.event) for item in self.items]
+
+    def _poll_wechat_listener(self) -> None:
+        if self.wechat_listener is None:
+            return
+        result = self._call_wechat_listener(include_seen=True)
+        if result.status == "ok":
+            self._append_listener_events(result.events)
+        else:
+            self.recent_logs.append(result.message)
+
+    def _call_wechat_listener(self, *, include_seen: bool) -> Any:
+        try:
+            return self.wechat_listener.poll_once(include_seen=include_seen)
+        except TypeError as exc:
+            if "include_seen" not in str(exc):
+                raise
+            return self.wechat_listener.poll_once()
+
+    def _append_listener_events(self, events: list[ChatEvent]) -> None:
+        existing_ids = {item.event.event_id for item in self.items}
+        for event in events:
+            if event.event_id in existing_ids:
+                continue
+            self.items.append(self.session.process_event(event))
+            existing_ids.add(event.event_id)
 
     def _default_trace_path(self, candidate_path: str | Path) -> Path:
         candidate = Path(candidate_path)

@@ -52,6 +52,15 @@ class WeChatBridgeConfigTest(unittest.TestCase):
 
         self.assertFalse(config.show_debug_config)
 
+    def test_config_from_dict_defaults_send_mode_to_manual_confirm(self):
+        config = WeChatBridgeConfig.from_dict({"group_name": "test group"})
+
+        self.assertEqual(config.send_mode, "manual_confirm")
+
+    def test_config_from_dict_rejects_unknown_send_mode(self):
+        with self.assertRaisesRegex(WeChatBridgeConfigError, "send_mode"):
+            WeChatBridgeConfig.from_dict({"group_name": "test group", "send_mode": "unsafe"})
+
     def test_config_store_round_trips_debug_config_switch(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "wechat_bridge_config.json"
@@ -63,6 +72,7 @@ class WeChatBridgeConfigTest(unittest.TestCase):
                 poll_interval_seconds=5,
                 enabled=True,
                 show_debug_config=True,
+                send_mode="auto_send",
             )
 
             store.save(config)
@@ -71,6 +81,8 @@ class WeChatBridgeConfigTest(unittest.TestCase):
 
         self.assertTrue(loaded.show_debug_config)
         self.assertTrue(raw["show_debug_config"])
+        self.assertEqual(loaded.send_mode, "auto_send")
+        self.assertEqual(raw["send_mode"], "auto_send")
 
     def test_listener_state_store_hashes_session_and_caps_seen_ids(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -228,6 +228,13 @@ test('workbench narrow layout keeps reply actions and detail labels readable', (
   assert.match(css, /@media \(max-width:\s*420px\)[\s\S]*\.decision-grid\s*{[^}]*grid-template-columns:\s*1fr/s)
 })
 
+test('workbench refreshes message list while observation is running', () => {
+  const app = read('src/renderer/App.tsx')
+
+  assert.match(app, /vision\.running/)
+  assert.match(app, /window\.setInterval\(refreshItems,\s*Math\.max\(2000,\s*status\.engine\.poll_interval_seconds \* 1000\)\)/)
+})
+
 test('workbench button actions surface missing ipc and service errors', () => {
   const app = read('src/renderer/App.tsx')
 

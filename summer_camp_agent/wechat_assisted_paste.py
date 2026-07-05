@@ -55,6 +55,24 @@ class AssistedPasteAdapter:
         except Exception:
             return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
 
+    def send_to_wechat_foreground(self, text: str) -> PasteResult:
+        copied = self.copy_only(text)
+        if copied.action != "copied":
+            return copied
+        title = ""
+        try:
+            title = self.backend.foreground_window_title()
+            if not is_wechat_window_title(title):
+                return PasteResult("copied", "已复制到剪贴板。请切回微信 PC 输入框后手动发送。", title)
+            self.backend.send_ctrl_v()
+        except Exception:
+            return PasteResult("copied", "已复制到剪贴板，但未能自动填入。请手动粘贴到微信输入框。", title)
+        try:
+            self.backend.send_enter()
+            return PasteResult("sent", "已自动发送到微信 PC。", title)
+        except Exception:
+            return PasteResult("pasted", "已填入微信 PC，但未能自动发送。请确认后手动发送。", title)
+
 
 class WindowsPasteBackend:
     CF_UNICODETEXT = 13
@@ -62,6 +80,7 @@ class WindowsPasteBackend:
     KEYEVENTF_KEYUP = 0x0002
     VK_CONTROL = 0x11
     VK_V = 0x56
+    VK_RETURN = 0x0D
 
     def __init__(self):
         self.user32 = ctypes.windll.user32 if sys.platform == "win32" else None
@@ -136,6 +155,12 @@ class WindowsPasteBackend:
         self._key_down(self.VK_V)
         self._key_up(self.VK_V)
         self._key_up(self.VK_CONTROL)
+
+    def send_enter(self) -> None:
+        if sys.platform != "win32":
+            raise OSError("当前平台不支持自动发送")
+        self._key_down(self.VK_RETURN)
+        self._key_up(self.VK_RETURN)
 
     def _key_down(self, key_code: int) -> None:
         self.user32.keybd_event(key_code, 0, 0, 0)

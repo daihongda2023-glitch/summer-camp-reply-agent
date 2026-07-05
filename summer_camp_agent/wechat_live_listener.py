@@ -25,6 +25,38 @@ class ListenerPollResult:
     events: list[ChatEvent]
 
 
+MESSAGE_ID_FIELDS = ("platformMessageId", "id", "messageId", "msgId", "clientMsgId", "localId")
+SENDER_ID_FIELDS = ("sender", "senderUsername", "fromUser", "fromUsername", "talker", "from")
+SENDER_NAME_FIELDS = (
+    "senderName",
+    "senderNickname",
+    "senderDisplayName",
+    "senderRemark",
+    "displayName",
+    "nickname",
+    "name",
+    "remark",
+)
+MEMBER_ID_FIELDS = ("id", "username", "userName", "wxid", "sender", "senderUsername")
+MEMBER_NAME_FIELDS = ("name", "displayName", "nickname", "remark", "alias")
+QUOTE_FIELDS = (
+    "quoteMessageId",
+    "quotedMessageId",
+    "quoteId",
+    "quotedId",
+    "referMessageId",
+    "referMsgId",
+    "replyToMessageId",
+    "replyToMsgId",
+    "replyTo",
+    "quote",
+    "quoted",
+    "reference",
+    "refer",
+)
+MENTION_FIELDS = ("mentions", "mentioned", "atUsers", "atUserList", "at_user_list", "atList", "at")
+
+
 class WeFlowLiveListener:
     def __init__(
         self,
@@ -43,7 +75,7 @@ class WeFlowLiveListener:
         self.alias_registry = AliasRegistry()
         self._session: WeFlowSession | None = None
 
-    def poll_once(self) -> ListenerPollResult:
+    def poll_once(self, *, include_seen: bool = False) -> ListenerPollResult:
         try:
             token_value = resolve_weflow_token(self.config.token_env, explicit_token=self.token)
         except WeFlowAuthError as exc:
@@ -54,14 +86,19 @@ class WeFlowLiveListener:
             state = self.state_store.load().with_session_id(session.id)
             since = int((self.clock() - timedelta(hours=1)).timestamp())
             payload = client.pull_messages(session.id, since=since, end=None, limit=100, offset=0)
+            raw_messages = [raw for raw in payload.get("messages", []) if isinstance(raw, dict)]
+            member_aliases = _member_aliases(payload)
+            replied_message_ids = _find_replied_message_ids(raw_messages, member_aliases)
             events: list[ChatEvent] = []
-            for raw in payload.get("messages", []):
-                if not isinstance(raw, dict):
-                    continue
+            for raw in raw_messages:
                 if int(raw.get("timestamp") or 0) < since:
                     continue
+                if _raw_message_id(raw) in replied_message_ids:
+                    continue
                 event = self._event_from_raw(raw, session)
-                if event is None or event.event_id in state.seen_event_ids:
+                if event is None:
+                    continue
+                if event.event_id in state.seen_event_ids and not include_seen:
                     continue
                 events.append(event)
                 state = state.with_seen_event(event.event_id)
@@ -119,3 +156,120 @@ class WeFlowLiveListener:
             raw_type=str(message.raw_type),
             source=message.source,
         )
+
+
+def _find_replied_message_ids(raw_messages: list[dict[str, Any]], member_aliases: dict[str, set[str]]) -> set[str]:
+    replied: set[str] = set()
+    for index, raw in enumerate(raw_messages):
+        message_id = _raw_message_id(raw)
+        if not message_id:
+            continue
+        sender_refs = _sender_reference_terms(raw, member_aliases)
+        timestamp = int(raw.get("timestamp") or 0)
+        for later in raw_messages[index + 1 :]:
+            later_timestamp = int(later.get("timestamp") or 0)
+            if timestamp and later_timestamp and later_timestamp <= timestamp:
+                continue
+            if _quotes_message(later, message_id) or _mentions_sender(later, sender_refs):
+                replied.add(message_id)
+                break
+    return replied
+
+
+def _raw_message_id(raw: dict[str, Any]) -> str:
+    for field in MESSAGE_ID_FIELDS:
+        value = str(raw.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _sender_reference_terms(raw: dict[str, Any], member_aliases: dict[str, set[str]]) -> set[str]:
+    refs: set[str] = set()
+    sender_id = ""
+    for field in SENDER_ID_FIELDS:
+        value = str(raw.get(field) or "").strip()
+        if value:
+            sender_id = value
+            refs.add(value)
+            break
+    for field in SENDER_NAME_FIELDS:
+        value = str(raw.get(field) or "").strip()
+        if value:
+            refs.add(value)
+    if sender_id:
+        refs.update(member_aliases.get(sender_id, set()))
+    return {ref for ref in refs if ref}
+
+
+def _member_aliases(payload: dict[str, Any]) -> dict[str, set[str]]:
+    raw_members = payload.get("members")
+    aliases: dict[str, set[str]] = {}
+    if isinstance(raw_members, dict):
+        iterable = []
+        for key, value in raw_members.items():
+            if isinstance(value, dict):
+                iterable.append({**value, "id": key})
+            else:
+                iterable.append({"id": key, "name": value})
+    elif isinstance(raw_members, list):
+        iterable = [member for member in raw_members if isinstance(member, dict)]
+    else:
+        iterable = []
+
+    for member in iterable:
+        member_id = ""
+        for field in MEMBER_ID_FIELDS:
+            value = str(member.get(field) or "").strip()
+            if value:
+                member_id = value
+                break
+        if not member_id:
+            continue
+        names = aliases.setdefault(member_id, set())
+        for field in MEMBER_NAME_FIELDS:
+            value = str(member.get(field) or "").strip()
+            if value:
+                names.add(value)
+    return aliases
+
+
+def _quotes_message(raw: dict[str, Any], message_id: str) -> bool:
+    if not message_id:
+        return False
+    return any(field in raw and message_id in _flatten_reference_values(raw[field]) for field in QUOTE_FIELDS)
+
+
+def _mentions_sender(raw: dict[str, Any], sender_refs: set[str]) -> bool:
+    if not sender_refs:
+        return False
+    content = str(raw.get("content") or "")
+    if any(f"@{ref}" in content for ref in sender_refs):
+        return True
+    for field in MENTION_FIELDS:
+        if field not in raw:
+            continue
+        values = _flatten_reference_values(raw[field])
+        if any(ref in values for ref in sender_refs):
+            return True
+    msg_source = str(raw.get("msgSource") or raw.get("messageSource") or "")
+    return any(ref and ref in msg_source for ref in sender_refs)
+
+
+def _flatten_reference_values(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, (str, int)):
+        text = str(value).strip()
+        return {text} if text else set()
+    if isinstance(value, dict):
+        values: set[str] = set()
+        for nested in value.values():
+            values.update(_flatten_reference_values(nested))
+        return values
+    if isinstance(value, list):
+        values: set[str] = set()
+        for item in value:
+            values.update(_flatten_reference_values(item))
+        return values
+    return set()

@@ -13,6 +13,9 @@ from .chat_log_sanitizer import hash_identifier
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "wechat_bridge_config.json"
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[1] / "data" / "listener_state.json"
 DEFAULT_GROUP_NAME = "沐曦开源英才夏令营咨询群"
+SEND_MODE_MANUAL_CONFIRM = "manual_confirm"
+SEND_MODE_AUTO_SEND = "auto_send"
+SEND_MODES = {SEND_MODE_MANUAL_CONFIRM, SEND_MODE_AUTO_SEND}
 
 
 class WeChatBridgeConfigError(ValueError):
@@ -29,6 +32,7 @@ class WeChatBridgeConfig:
     poll_interval_seconds: int = 5
     enabled: bool = True
     show_debug_config: bool = False
+    send_mode: str = SEND_MODE_MANUAL_CONFIRM
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "WeChatBridgeConfig":
@@ -41,6 +45,7 @@ class WeChatBridgeConfig:
             poll_interval_seconds=int(raw.get("poll_interval_seconds") or 5),
             enabled=bool(raw.get("enabled", True)),
             show_debug_config=bool(raw.get("show_debug_config", False)),
+            send_mode=str(raw.get("send_mode") or SEND_MODE_MANUAL_CONFIRM),
         )
         config.validate()
         return config
@@ -51,6 +56,8 @@ class WeChatBridgeConfig:
             raise WeChatBridgeConfigError("WeFlow base_url 只允许连接本机 127.0.0.1 或 localhost。")
         if self.poll_interval_seconds < 2 or self.poll_interval_seconds > 60:
             raise WeChatBridgeConfigError("poll_interval_seconds 必须在 2 到 60 秒之间。")
+        if self.send_mode not in SEND_MODES:
+            raise WeChatBridgeConfigError("send_mode 必须是 manual_confirm 或 auto_send。")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
