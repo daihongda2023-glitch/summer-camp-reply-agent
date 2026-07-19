@@ -14,6 +14,14 @@ from summer_camp_agent.wechat_bridge_config import (
 
 
 class WeChatBridgeConfigTest(unittest.TestCase):
+    def test_config_defaults_weflow_connection_to_disabled(self):
+        self.assertFalse(WeChatBridgeConfig().use_weflow)
+        self.assertFalse(WeChatBridgeConfig.from_dict({"enabled": True}).use_weflow)
+
+    def test_config_rejects_non_boolean_weflow_switch(self):
+        with self.assertRaisesRegex(WeChatBridgeConfigError, "use_weflow"):
+            WeChatBridgeConfig.from_dict({"use_weflow": "false"})
+
     def test_default_config_uses_target_weflow_group(self):
         self.assertEqual(WeChatBridgeConfig().group_name, DEFAULT_GROUP_NAME)
         self.assertEqual(WeChatBridgeConfig.from_dict({}).group_name, DEFAULT_GROUP_NAME)
@@ -66,6 +74,7 @@ class WeChatBridgeConfigTest(unittest.TestCase):
             path = Path(directory) / "wechat_bridge_config.json"
             store = WeChatBridgeConfigStore(path)
             config = WeChatBridgeConfig(
+                use_weflow=True,
                 group_name="test group",
                 session_id="room@chatroom",
                 keywords=["signup"],
@@ -80,6 +89,8 @@ class WeChatBridgeConfigTest(unittest.TestCase):
             raw = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertTrue(loaded.show_debug_config)
+        self.assertTrue(loaded.use_weflow)
+        self.assertTrue(raw["use_weflow"])
         self.assertTrue(raw["show_debug_config"])
         self.assertEqual(loaded.send_mode, "auto_send")
         self.assertEqual(raw["send_mode"], "auto_send")

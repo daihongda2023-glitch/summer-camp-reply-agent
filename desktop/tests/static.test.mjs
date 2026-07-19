@@ -76,19 +76,24 @@ test('settings page edits wechat bridge group keywords and polling interval', ()
   const types = read('src/shared/types.ts')
 
   assert.match(types, /interface WeChatBridgeSettings/)
+  assert.match(types, /use_weflow:\s*boolean/)
   assert.match(types, /send_mode:\s*string/)
   assert.match(types, /saveSettings\(settings: AppSettingsUpdate\)/)
   assert.match(app, /value=\{wechatForm\.group_name\}/)
   assert.match(app, /value=\{wechatForm\.keywordsText\}/)
   assert.match(app, /value=\{wechatForm\.poll_interval_seconds\}/)
   assert.match(app, /value=\{wechatForm\.send_mode\}/)
+  assert.match(app, /checked=\{wechatForm\.use_weflow\}/)
+  assert.match(app, /use_weflow:\s*wechatForm\.use_weflow/)
+  assert.match(app, /wechatForm\.use_weflow && !groupName/)
+  assert.match(app, /wechatForm\.use_weflow && \(/)
   assert.match(app, /manual_confirm/)
   assert.match(app, /auto_send/)
   assert.match(app, /saveWechatSettings/)
   assert.match(app, /wechat:\s*\{/)
   assert.match(app, /send_mode:\s*wechatForm\.send_mode/)
   assert.match(app, /监听关键字/)
-  assert.match(app, /保存微信桥接/)
+  assert.match(app, /保存微信设置/)
 })
 
 test('controller layout is constrained for a narrow desktop window', () => {
@@ -138,6 +143,8 @@ test('desktop api exposes workbench and vision operations', () => {
 
   assert.match(main, /ipcMain\.handle\('workbench:getItems'/)
   assert.match(main, /ipcMain\.handle\('workbench:publishReply'/)
+  assert.match(main, /withMainWindowHidden/)
+  assert.match(main, /win\?\.hide\(\)/)
   assert.match(main, /ipcMain\.handle\('vision:capture'/)
   assert.match(main, /\/api\/items/)
   assert.match(main, /\/api\/wechat\/publish/)
@@ -236,7 +243,17 @@ test('workbench refreshes message list while observation is running', () => {
   const app = read('src/renderer/App.tsx')
 
   assert.match(app, /vision\.running/)
-  assert.match(app, /window\.setInterval\(refreshItems,\s*Math\.max\(2000,\s*status\.engine\.poll_interval_seconds \* 1000\)\)/)
+  assert.match(app, /status\.engine\.use_weflow \? refreshItems : captureVision/)
+  assert.match(app, /window\.setTimeout\(refreshObservedMessages,\s*pollInterval\)/)
+  assert.doesNotMatch(app, /window\.setInterval\(refreshObservedMessages/)
+})
+
+test('desktop defaults to screenshot one-to-one mode', () => {
+  const app = read('src/renderer/App.tsx')
+
+  assert.match(app, /use_weflow:\s*false/)
+  assert.match(app, /use_weflow:\s*current\.use_weflow \?\? false/)
+  assert.match(app, /status\.engine\.use_weflow/)
 })
 
 test('workbench button actions surface missing ipc and service errors', () => {

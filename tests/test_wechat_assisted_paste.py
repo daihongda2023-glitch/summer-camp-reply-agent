@@ -23,7 +23,7 @@ class FakeBackend:
     def foreground_window_title(self):
         return "微信"
 
-    def find_target_window(self, target_group_name):
+    def find_target_window(self, target_group_name, foreground_only=False):
         if self.target_status == "matched":
             return ComposeTarget(status="matched", hwnd=100, title="微信")
         return ComposeTarget(status=self.target_status, hwnd=0, title="")
@@ -110,7 +110,7 @@ class NonWechatBackend(FakeBackend):
     def foreground_window_title(self):
         return "Visual Studio Code"
 
-    def find_target_window(self, target_group_name):
+    def find_target_window(self, target_group_name, foreground_only=False):
         return ComposeTarget(status="not_found", hwnd=0, title="")
 
 

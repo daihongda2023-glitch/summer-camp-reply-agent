@@ -63,6 +63,7 @@ class WorkbenchApiState:
             "engine": {
                 "status": "running" if self.app_running else "idle",
                 "listener_running": self.wechat_listener_running,
+                "use_weflow": self.wechat_config.use_weflow,
                 "group_name": self.wechat_config.group_name,
                 "send_mode": self.wechat_config.send_mode,
                 "poll_interval_seconds": self.wechat_config.poll_interval_seconds,
@@ -140,6 +141,8 @@ class WorkbenchApiState:
         client: WeFlowImportClient | None = None,
         token: str | None = None,
     ) -> dict[str, Any]:
+        if not self.wechat_config.use_weflow:
+            raise ValueError("当前未接入 WeFlow，请先在设置中开启 WeFlow。")
         active_group_name = group_name.strip()
         if not active_group_name:
             raise ValueError("群聊名称不能为空")
@@ -186,7 +189,7 @@ class WorkbenchApiState:
         }
 
     def list_items(self) -> dict[str, Any]:
-        if self.wechat_listener_running and self.wechat_listener is not None:
+        if self.wechat_config.use_weflow and self.wechat_listener_running and self.wechat_listener is not None:
             self._poll_wechat_listener()
         return {"items": [serialize_item(item) for item in self.items]}
 
@@ -208,10 +211,11 @@ class WorkbenchApiState:
         content = question.strip()
         if not content:
             raise ValueError("问题不能为空")
+        conversation_name = self.group_config.group_name if self.wechat_config.use_weflow else self.vision_observer.state.window_title
         event = ChatEvent(
             event_id=hash_identifier(f"{datetime.now().isoformat()}:{content}"),
             group_id_hash="sha256:web-manual",
-            group_name=self.group_config.group_name,
+            group_name=conversation_name,
             sender_alias="手动输入",
             sender_role="student",
             message_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -251,6 +255,8 @@ class WorkbenchApiState:
         return {"config": self.wechat_config.to_dict()}
 
     def start_wechat_listener(self) -> dict[str, Any]:
+        if not self.wechat_config.use_weflow:
+            raise ValueError("当前未接入 WeFlow，请先在设置中开启 WeFlow。")
         self.wechat_listener = WeFlowLiveListener(self.wechat_config)
         self.wechat_listener_running = True
         return {
@@ -264,6 +270,12 @@ class WorkbenchApiState:
         return {"status": "ok", "message": "已停止监听"}
 
     def poll_wechat_once(self) -> dict[str, Any]:
+        if not self.wechat_config.use_weflow:
+            return {
+                "status": "error",
+                "message": "当前未接入 WeFlow，请使用截图识别当前微信会话。",
+                "items": [serialize_item(item) for item in self.items],
+            }
         if self.wechat_listener is None:
             return {"status": "error", "message": "请先开始监听", "items": [serialize_item(item) for item in self.items]}
         result = self._call_wechat_listener(include_seen=True)
@@ -275,7 +287,7 @@ class WorkbenchApiState:
         item = self._find_item(event_id)
         action = "paste"
         paste_method = getattr(self.paste_adapter, "paste_to_wechat_foreground", self.paste_adapter.paste_to_foreground)
-        result = self._call_paste_method(paste_method, reply)
+        result = self._call_paste_method(paste_method, reply, item=item)
         operator_action = self._operator_action_for_paste_result(result)
         self.session.record_operator_action(item, reply, operator_action=operator_action, action=action)
         return self._paste_result_payload(result)
@@ -287,7 +299,7 @@ class WorkbenchApiState:
         publish_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
         if publish_method is None:
             raise ValueError("当前粘贴适配器不支持自动发布。")
-        result = self._call_paste_method(publish_method, reply)
+        result = self._call_paste_method(publish_method, reply, item=item)
         operator_action = self._operator_action_for_publish_result(result)
         self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
         return self._paste_result_payload(result)
@@ -304,14 +316,17 @@ class WorkbenchApiState:
             "fallback_reason": getattr(result, "fallback_reason", ""),
         }
 
-    def _call_paste_method(self, method: Any, reply: str) -> Any:
+    def _call_paste_method(self, method: Any, reply: str, *, item: WorkbenchItem) -> Any:
         try:
             signature = inspect.signature(method)
         except (TypeError, ValueError):
             return method(reply)
+        kwargs = {}
         if "target_group_name" in signature.parameters:
-            return method(reply, target_group_name=self.wechat_config.group_name)
-        return method(reply)
+            kwargs["target_group_name"] = self.wechat_config.group_name if self.wechat_config.use_weflow else item.event.group_name
+        if "foreground_only" in signature.parameters:
+            kwargs["foreground_only"] = not self.wechat_config.use_weflow
+        return method(reply, **kwargs)
 
     def _operator_action_for_paste_result(self, result: Any) -> str:
         action = getattr(result, "action", "")
@@ -349,10 +364,13 @@ class WorkbenchApiState:
 
     def start_vision(self) -> dict[str, Any]:
         vision = self.vision_observer.start()
+        self.recent_logs.append("微信视觉观察器已启动")
+        if not self.wechat_config.use_weflow:
+            self.wechat_listener_running = False
+            return self.capture_vision_once()
         if self.wechat_listener is None:
             self.wechat_listener = WeFlowLiveListener(self.wechat_config)
         self.wechat_listener_running = True
-        self.recent_logs.append("微信视觉观察器已启动")
         polled = self.poll_wechat_once()
         return {**polled, "vision": serialize_vision_state(vision)}
 
@@ -386,10 +404,11 @@ class WorkbenchApiState:
                 "vision": serialize_vision_state(vision),
             }
 
+        conversation_name = self.wechat_config.group_name if self.wechat_config.use_weflow else capture.window_title.strip()
         result = self.vision_observer.capture_once(
             capture.screenshot,
             window_title=capture.window_title,
-            group_name=self.group_config.group_name,
+            group_name=conversation_name or "微信一对一客服",
         )
         for event in result.events:
             self.items.append(self.session.process_event(event))
@@ -426,8 +445,12 @@ class WorkbenchApiState:
         self.session.update_group_config(group_config)
 
     def _refresh_wechat_listener_if_running(self) -> None:
-        if self.wechat_listener_running:
+        if not self.wechat_config.use_weflow:
+            self.wechat_listener = None
+            self.wechat_listener_running = False
+        elif self.wechat_listener_running or self.vision_observer.state.running:
             self.wechat_listener = WeFlowLiveListener(self.wechat_config)
+            self.wechat_listener_running = True
 
     def _reprocess_items(self) -> None:
         self.items = [self.session.process_event(item.event) for item in self.items]

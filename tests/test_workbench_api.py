@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from summer_camp_agent.workbench_api import WorkbenchApiState, create_handler
-from summer_camp_agent.wechat_bridge_config import DEFAULT_GROUP_NAME
+from summer_camp_agent.wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig
+from summer_camp_agent.wechat_vision import VisionState
 from summer_camp_agent.weflow_import import WeFlowSession
 
 
@@ -42,6 +43,20 @@ class WorkbenchApiTest(unittest.TestCase):
             payload = state.get_wechat_config()
 
         self.assertEqual(payload["config"]["group_name"], DEFAULT_GROUP_NAME)
+        self.assertFalse(payload["config"]["use_weflow"])
+
+    def test_default_app_status_reports_weflow_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+
+            payload = state.get_app_status()
+
+        self.assertFalse(payload["engine"]["use_weflow"])
 
     def test_app_settings_api_round_trips_desktop_settings(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -92,6 +107,7 @@ class WorkbenchApiTest(unittest.TestCase):
             payload = state.update_app_settings(
                 {
                     "wechat": {
+                        "use_weflow": True,
                         "base_url": "http://127.0.0.1:5031",
                         "token_env": "WEFLOW_API_TOKEN",
                         "group_name": "宝宝守护群",
@@ -111,10 +127,12 @@ class WorkbenchApiTest(unittest.TestCase):
             ).get_app_settings()
 
         self.assertEqual(payload["wechat"]["group_name"], "宝宝守护群")
+        self.assertTrue(payload["wechat"]["use_weflow"])
         self.assertEqual(payload["wechat"]["keywords"], ["报名", "住宿", "GPU"])
         self.assertEqual(payload["wechat"]["poll_interval_seconds"], 8)
         self.assertEqual(payload["wechat"]["send_mode"], "auto_send")
         self.assertEqual(reloaded["wechat"]["group_name"], "宝宝守护群")
+        self.assertTrue(reloaded["wechat"]["use_weflow"])
         self.assertEqual(reloaded["wechat"]["keywords"], ["报名", "住宿", "GPU"])
         self.assertEqual(reloaded["wechat"]["send_mode"], "auto_send")
 
@@ -202,6 +220,7 @@ class WorkbenchApiTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_config = WeChatBridgeConfig(use_weflow=True)
             client = FakeWeFlowImportClient()
 
             payload = state.import_weflow_group("测试群", client=client, token="fake-token")
@@ -260,11 +279,15 @@ class FakePasteAdapter:
     def __init__(self):
         self.pasted = []
         self.sent = []
+        self.target_names = []
+        self.foreground_only_values = []
 
-    def paste_to_foreground(self, text, target_group_name=""):
+    def paste_to_foreground(self, text, target_group_name="", foreground_only=False):
         from summer_camp_agent.wechat_assisted_paste import PasteResult
 
         self.pasted.append(text)
+        self.target_names.append(target_group_name)
+        self.foreground_only_values.append(foreground_only)
         return PasteResult(
             "filled_verified",
             "已填入并校验，请在微信中检查后手动发送。",
@@ -278,13 +301,15 @@ class FakePasteAdapter:
             verification_status="matched",
         )
 
-    def paste_to_wechat_foreground(self, text, target_group_name=""):
-        return self.paste_to_foreground(text, target_group_name)
+    def paste_to_wechat_foreground(self, text, target_group_name="", foreground_only=False):
+        return self.paste_to_foreground(text, target_group_name, foreground_only)
 
-    def send_to_wechat_foreground(self, text, target_group_name=""):
+    def send_to_wechat_foreground(self, text, target_group_name="", foreground_only=False):
         from summer_camp_agent.wechat_assisted_paste import PasteResult
 
         self.sent.append(text)
+        self.target_names.append(target_group_name)
+        self.foreground_only_values.append(foreground_only)
         return PasteResult(
             "sent_verified",
             "已自动发布到微信。",
@@ -300,6 +325,56 @@ class FakePasteAdapter:
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
+    def test_paste_reply_uses_last_captured_wechat_window_without_weflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.vision_observer = FakeVisionObserver()
+            state.vision_window_backend = FakeVisionWindowBackend(window_title="客户张三 - 微信")
+            item = state.capture_vision_once()["items"][0]
+            state.vision_observer.state = VisionState(running=True, window_title="客户李四 - 微信")
+
+            state.paste_reply(item["event_id"], item["reply"])
+
+        self.assertEqual(state.paste_adapter.target_names, ["客户张三 - 微信"])
+        self.assertEqual(state.paste_adapter.foreground_only_values, [True])
+
+    def test_start_listener_is_rejected_when_weflow_is_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+
+            with self.assertRaisesRegex(ValueError, "WeFlow"):
+                state.start_wechat_listener()
+
+    def test_manual_question_keeps_current_screenshot_conversation_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.vision_observer.state = VisionState(running=True, window_title="客户张三 - 微信")
+            item = state.ask("报名入口在哪里？")["item"]
+            state.vision_observer.state = VisionState(running=True, window_title="客户李四 - 微信")
+
+            state.paste_reply(item["event_id"], item["reply"])
+
+        self.assertEqual(item["group_name"], "客户张三 - 微信")
+        self.assertEqual(state.paste_adapter.target_names, ["客户张三 - 微信"])
+        self.assertEqual(state.paste_adapter.foreground_only_values, [True])
+
     def test_start_listener_uses_saved_wechat_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -308,6 +383,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                 json.dumps(
                     {
                         "base_url": "http://127.0.0.1:5031",
+                        "use_weflow": True,
                         "token_env": "WEFLOW_API_TOKEN",
                         "group_name": "测试群",
                         "session_id": "",
@@ -426,6 +502,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_config = WeChatBridgeConfig(use_weflow=True)
             state.wechat_listener = FakeListener([event])
 
             payload = state.poll_wechat_once()
@@ -457,6 +534,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             state.configure_wechat(
                 {
                     "base_url": "http://127.0.0.1:5031",
+                    "use_weflow": True,
                     "token_env": "WEFLOW_API_TOKEN",
                     "group_name": "测试群",
                     "session_id": "",
@@ -482,11 +560,13 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                 log_path=root / "logs.jsonl",
                 wechat_config_path=root / "wechat_bridge_config.json",
             )
+            state.wechat_config = WeChatBridgeConfig(use_weflow=True)
 
             state.start_wechat_listener()
             state.configure_wechat(
                 {
                     "base_url": "http://127.0.0.1:5031",
+                    "use_weflow": True,
                     "token_env": "WEFLOW_API_TOKEN",
                     "group_name": "测试群",
                     "session_id": "",
@@ -499,6 +579,32 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
         self.assertEqual(state.wechat_listener.config.keywords, ["测试"])
         self.assertEqual(state.wechat_listener.config.group_name, "测试群")
+
+    def test_enabling_weflow_while_vision_runs_starts_listener(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.vision_observer = FakeVisionObserver()
+            state.vision_observer.start()
+
+            state.configure_wechat(
+                {
+                    "use_weflow": True,
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "keywords": ["测试"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                }
+            )
+
+        self.assertTrue(state.wechat_listener_running)
+        self.assertIsNotNone(state.wechat_listener)
 
     def test_configure_wechat_reprocesses_existing_untriggered_items(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -687,6 +793,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_config = WeChatBridgeConfig(use_weflow=True)
             state.wechat_listener = FakeListener([event])
             state.wechat_listener_running = True
 
@@ -756,6 +863,25 @@ class FakeVisionWindowBackend:
 
 
 class WorkbenchVisionApiTest(unittest.TestCase):
+    def test_start_vision_captures_foreground_conversation_without_weflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.vision_observer = FakeVisionObserver()
+            state.vision_window_backend = FakeVisionWindowBackend(window_title="客户张三 - 微信")
+
+            payload = state.start_vision()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["items"][0]["source"], "wechat_pc_vision")
+        self.assertEqual(payload["items"][0]["group_name"], "客户张三 - 微信")
+        self.assertIsNone(state.wechat_listener)
+        self.assertFalse(state.wechat_listener_running)
+
     def test_start_vision_polls_weflow_messages_first(self):
         from summer_camp_agent.workbench_models import ChatEvent
 
@@ -773,6 +899,7 @@ class WorkbenchVisionApiTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state.wechat_config = WeChatBridgeConfig(use_weflow=True)
             state.wechat_listener = FakeListener([event])
             state.vision_observer = FakeVisionObserver()
             state.vision_window_backend = FakeVisionWindowBackend(status="not_found", message="不应先走截图识别")

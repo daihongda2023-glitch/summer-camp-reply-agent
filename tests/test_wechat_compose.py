@@ -23,7 +23,7 @@ class FakeComposeBackend:
     def set_clipboard_text(self, text):
         self.clipboard_text = text
 
-    def find_target_window(self, target_group_name):
+    def find_target_window(self, target_group_name, foreground_only=False):
         if self.target_status == "matched":
             return ComposeTarget(status="matched", hwnd=100, title=self.title)
         return ComposeTarget(status=self.target_status, hwnd=0, title="")
@@ -122,6 +122,47 @@ class WeChatComposeControllerTest(unittest.TestCase):
 
 
 class WindowsComposeBackendTargetSelectionTest(unittest.TestCase):
+    def test_foreground_only_target_does_not_activate_matching_background_window(self):
+        backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
+
+        target = backend._select_target_window(
+            "\u5ba2\u6237\u5f20\u4e09 - \u5fae\u4fe1",
+            foreground_hwnd=99,
+            foreground_title="Electron",
+            wechat_windows=[(10, "\u5ba2\u6237\u5f20\u4e09 - \u5fae\u4fe1")],
+            foreground_only=True,
+        )
+
+        self.assertEqual(target.status, "not_found")
+        self.assertEqual(target.reason, "foreground_wechat_required")
+
+    def test_without_group_target_uses_only_foreground_wechat_window(self):
+        backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
+
+        target = backend._select_target_window(
+            "",
+            foreground_hwnd=10,
+            foreground_title="\u5ba2\u6237\u5f20\u4e09 - \u5fae\u4fe1",
+            wechat_windows=[(10, "\u5ba2\u6237\u5f20\u4e09 - \u5fae\u4fe1"), (11, "\u5ba2\u6237\u674e\u56db - \u5fae\u4fe1")],
+        )
+
+        self.assertEqual(target.status, "matched")
+        self.assertEqual(target.hwnd, 10)
+        self.assertEqual(target.reason, "foreground_wechat")
+
+    def test_without_group_target_does_not_guess_a_background_wechat_window(self):
+        backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
+
+        target = backend._select_target_window(
+            "",
+            foreground_hwnd=99,
+            foreground_title="\u5176\u4ed6\u5e94\u7528",
+            wechat_windows=[(10, "\u5ba2\u6237\u5f20\u4e09 - \u5fae\u4fe1")],
+        )
+
+        self.assertEqual(target.status, "not_found")
+        self.assertEqual(target.reason, "foreground_wechat_required")
+
     def test_accepts_single_generic_wechat_window_when_group_title_is_not_exposed(self):
         backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
 

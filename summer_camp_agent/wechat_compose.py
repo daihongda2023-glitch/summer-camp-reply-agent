@@ -46,7 +46,7 @@ class WeChatComposeController:
     def __init__(self, backend):
         self.backend = backend
 
-    def fill_reply(self, text: str, *, target_group_name: str = "") -> ComposeFillResult:
+    def fill_reply(self, text: str, *, target_group_name: str = "", foreground_only: bool = False) -> ComposeFillResult:
         value = text.strip()
         if not value:
             return ComposeFillResult("failed", "回复内容不能为空。", fallback_reason="empty_reply")
@@ -56,7 +56,7 @@ class WeChatComposeController:
         except Exception as exc:  # noqa: BLE001
             return ComposeFillResult("failed", f"写入剪贴板失败：{exc}", fallback_reason="clipboard_failed")
 
-        target = self.backend.find_target_window(target_group_name)
+        target = self.backend.find_target_window(target_group_name, foreground_only=foreground_only)
         if target.status != "matched":
             return self._target_failure(target)
 
@@ -225,7 +225,7 @@ class WindowsComposeBackend:
             raise OSError("当前平台不支持自动写入系统剪贴板")
         self.clipboard_backend.set_clipboard_text(text)
 
-    def find_target_window(self, target_group_name: str) -> ComposeTarget:
+    def find_target_window(self, target_group_name: str, foreground_only: bool = False) -> ComposeTarget:
         if sys.platform != "win32":
             return ComposeTarget("not_found", reason="unsupported_platform")
 
@@ -246,6 +246,7 @@ class WindowsComposeBackend:
             foreground_hwnd=foreground_hwnd,
             foreground_title=foreground_title,
             wechat_windows=wechat_windows,
+            foreground_only=foreground_only,
         )
 
     def find_compose_input(self, target: ComposeTarget) -> ComposeInput:
@@ -431,8 +432,22 @@ class WindowsComposeBackend:
         foreground_hwnd: int,
         foreground_title: str,
         wechat_windows: list[tuple[int, str]],
+        foreground_only: bool = False,
     ) -> ComposeTarget:
         unique = self._dedupe_windows(wechat_windows)
+
+        if foreground_only:
+            for hwnd, title in unique:
+                if hwnd == foreground_hwnd and self._matches_target_title(title, target_group_name):
+                    return ComposeTarget("matched", hwnd, title, reason="foreground_wechat")
+            return ComposeTarget("not_found", title=foreground_title, reason="foreground_wechat_required")
+
+        if not target_group_name:
+            for hwnd, title in unique:
+                if hwnd == foreground_hwnd:
+                    return ComposeTarget("matched", hwnd, title, reason="foreground_wechat")
+            return ComposeTarget("not_found", title=foreground_title, reason="foreground_wechat_required")
+
         target_matches = [(hwnd, title) for hwnd, title in unique if self._matches_target_title(title, target_group_name)]
 
         for hwnd, title in target_matches:

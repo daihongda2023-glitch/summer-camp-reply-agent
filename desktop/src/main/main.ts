@@ -83,6 +83,7 @@ class PythonService {
       engine: {
         status: this.status,
         listener_running: false,
+        use_weflow: false,
         group_name: '未连接',
         send_mode: 'manual_confirm',
         poll_interval_seconds: 5
@@ -219,6 +220,23 @@ let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 let advancedWindow: BrowserWindow | null = null
 
+async function withMainWindowHidden<T>(action: () => Promise<T>): Promise<T> {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const shouldRestore = Boolean(win?.isVisible())
+  if (shouldRestore) {
+    win?.hide()
+    await new Promise((resolve) => setTimeout(resolve, 180))
+  }
+  try {
+    return await action()
+  } finally {
+    if (shouldRestore && win && !win.isDestroyed()) {
+      win.show()
+      win.focus()
+    }
+  }
+}
+
 function defaultSettings(): DesktopSettings {
   return {
     window: { width: 380, height: 680, min_width: 360, min_height: 560, settings_width: 900, settings_height: 720 },
@@ -274,8 +292,10 @@ app.whenReady().then(() => {
   ipcMain.handle('app:loadDemo', () => service.loadDemo())
   ipcMain.handle('workbench:getItems', () => service.getItems())
   ipcMain.handle('workbench:ask', (_event, question: string) => service.ask(question))
-  ipcMain.handle('workbench:pasteReply', (_event, eventId: string, reply: string) => service.pasteReply(eventId, reply))
-  ipcMain.handle('workbench:publishReply', (_event, eventId: string, reply: string) => service.publishReply(eventId, reply))
+  ipcMain.handle('workbench:pasteReply', (_event, eventId: string, reply: string) =>
+    withMainWindowHidden(() => service.pasteReply(eventId, reply)))
+  ipcMain.handle('workbench:publishReply', (_event, eventId: string, reply: string) =>
+    withMainWindowHidden(() => service.publishReply(eventId, reply)))
   ipcMain.handle('workbench:confirmSent', (_event, eventId: string, reply: string) => service.confirmSent(eventId, reply))
   ipcMain.handle('workbench:saveCandidate', (_event, eventId: string, reply: string) => service.saveCandidate(eventId, reply))
   ipcMain.handle('vision:start', () => service.startVision())

@@ -24,6 +24,7 @@ class WeChatBridgeConfigError(ValueError):
 
 @dataclass(frozen=True)
 class WeChatBridgeConfig:
+    use_weflow: bool = False
     base_url: str = "http://127.0.0.1:5031"
     token_env: str = "WEFLOW_API_TOKEN"
     group_name: str = DEFAULT_GROUP_NAME
@@ -36,7 +37,11 @@ class WeChatBridgeConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "WeChatBridgeConfig":
+        use_weflow = raw.get("use_weflow", False)
+        if not isinstance(use_weflow, bool):
+            raise WeChatBridgeConfigError("use_weflow 必须是布尔值。")
         config = cls(
+            use_weflow=use_weflow,
             base_url=str(raw.get("base_url") or "http://127.0.0.1:5031"),
             token_env=str(raw.get("token_env") or "WEFLOW_API_TOKEN"),
             group_name=str(raw.get("group_name") or DEFAULT_GROUP_NAME),

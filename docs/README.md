@@ -31,7 +31,7 @@
 | `python -m summer_camp_agent.cli review "营服是什么颜色？" --pending-log data/pending_questions.jsonl` | 对未覆盖问题生成审核卡，并写入待补充 JSONL 清单 |
 | `python -m summer_camp_agent.cli import-weflow --group "沐曦开源英才夏令营咨询群" --keywords "报名,报到,住宿,交通" --start 20260601 --end 20260630` | 从已启动的 WeFlow 本地 API 导入指定微信群聊天记录，输出脱敏 JSONL |
 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_desktop_app.ps1` | 启动 Electron 桌面版工作台 |
-| 双击 `启动夏令营Agent.cmd` | 一键后台启动 WeFlow 并打开 Electron 桌面版工作台 |
+| 双击 `启动夏令营Agent.cmd` | 打开 Electron 桌面版工作台；默认不准备或启动 WeFlow |
 | `python -B -m summer_camp_agent.workbench_server --port 0` | 启动桌面端本地能力 API，仅用于 Electron 后端调试 |
 | `python -B -m summer_camp_agent.workbench_gui` | 启动 Tkinter 版工作台 |
 | `python -B -m summer_camp_agent.gui` | 启动旧版单轮桌面问答窗口 |
@@ -46,13 +46,20 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_desktop_app.ps1
 ```
 
-微信 PC 默认仍是半自动模式：识别消息、生成草稿并填入输入框，不会自动发送。若当前群聊是测试群或已完成运营授权，可以在配置中把发送方式切换为“系统自动发送”，再在主界面点击“自动发布”；系统会先定位目标群输入框并填入草稿，填入成功后才触发回车发送，并记录 `auto_sent_to_wechat` 操作。
+微信 PC 默认使用截图识别当前打开的一对一客服会话，无需填写群聊名称或保存群聊监听配置。默认仍是半自动模式：识别消息、生成草稿并填入输入框，不会自动发送。若当前会话用于测试或已完成运营授权，可以在配置中把发送方式切换为“系统自动发送”，再在主界面点击“自动发布”；系统会先定位目标会话输入框并填入草稿，填入成功后才触发回车发送，并记录 `auto_sent_to_wechat` 操作。
 
-## WeFlow 聊天记录导入
+## WeFlow 聊天记录导入（可选）
 
-双击 `启动夏令营Agent.cmd` 会自动补齐 WeFlow 本地 API 配置、启动 WeFlow 并等待 `http://127.0.0.1:5031/api/v1/health` 可访问。Token 优先读取 `WEFLOW_API_TOKEN` 环境变量；未设置时会读取 `%APPDATA%\weflow\WeFlow-config.json` 中的 `httpApiToken`。启动器不会把真实 Token 写入项目仓库或日志。
+启动器默认不会准备 WeFlow 配置，也不会启动 WeFlow；默认的一对一截图识别不依赖 WeFlow。只有显式设置 `SUMMER_CAMP_AGENT_START_WEFLOW=1` 时，启动器才会补齐 WeFlow 本地 API 配置、设置本次启动所需的 Token 和配置路径，并在后台启动 WeFlow、等待 `http://127.0.0.1:5031/api/v1/health` 可访问：
 
-本项目不会读取或解密微信数据库，只消费 WeFlow 本地 API 返回的数据。命令行导出的聊天记录默认写入 `imports/chat_logs/`，该目录已被 `.gitignore` 忽略；桌面版工作台可以直接按群聊名称从 WeFlow 导入聊天记录，不需要上传 JSONL 文件。聊天记录只用于说话风格蒸馏和高频问题发现，不能直接作为官方事实答案。
+```powershell
+$env:SUMMER_CAMP_AGENT_START_WEFLOW = '1'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_agent_workbench.ps1
+```
+
+WeFlow Token 优先读取已有配置；配置中没有 Token 时由启动器生成并写入 `%APPDATA%\weflow\WeFlow-config.json`。启动器不会把真实 Token 写入项目仓库或日志。桌面端启动后，还需要在“配置 > 微信接入”中开启“接入 WeFlow”并填写群聊名称；环境变量只负责允许启动器拉起本地 WeFlow 服务，不会替代应用内开关。
+
+本项目不会读取或解密微信数据库，只消费 WeFlow 本地 API 返回的数据。命令行导出的聊天记录默认写入 `imports/chat_logs/`，该目录已被 `.gitignore` 忽略。聊天记录只用于说话风格蒸馏和高频问题发现，不能直接作为官方事实答案。
 
 ## PC 端工作台 MVP 演示
 
@@ -63,20 +70,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_desktop_ap
 3. 点击中间消息流中的任意消息，右侧会展示触发原因、建议动作、意图、来源、置信度和模式决策。
 4. 底部回复框会自动填入草稿；可以修改后点击“填入微信”，也可以在配置为“系统自动发送”后点击“自动发布”。
 5. 修改后点击“我已发送”会写入 `data/reply_logs.jsonl`；点击“自动发布”成功后会写入 `auto_sent_to_wechat`；只点“保存候选”会写入候选库，但不会记录发送动作。
-6. 在左侧填写群聊名称后点击“从 WeFlow 导入”，工作台会通过 WeFlow 本地 API 拉取该群聊的聊天记录并生成待处理消息。
+6. 可选接入 WeFlow 时，先按上文设置启动环境变量，再在“配置 > 微信接入”开启开关并填写群聊名称；保存后观察功能会通过 WeFlow 本地 API 拉取待处理消息。
 
-默认模式下，工作台不会后台向微信发送消息。“填入微信”只会把草稿粘贴到微信 PC 当前输入框，不会自动按回车或点击发送；“我已发送”只表示运营已经在微信中人工确认并手动发送。只有配置为“系统自动发送”并点击“自动发布”时，系统才会在填入成功后按回车发送。需要排障时查看 `data/agent_launcher.log`、`data/desktop-electron.out`、`data/desktop-electron.err`、`data/desktop-vite.out`、`data/desktop-vite.err`，以及 `D:\github\WeFlow\weflow-dev.out`、`D:\github\WeFlow\weflow-dev.err`。
+默认模式下，工作台不会后台向微信发送消息。“填入微信”只会把草稿粘贴到微信 PC 当前输入框，不会自动按回车或点击发送；“我已发送”只表示运营已经在微信中人工确认并手动发送。只有配置为“系统自动发送”并点击“自动发布”时，系统才会在填入成功后按回车发送。需要排障时查看 `data/agent_launcher.log`、`data/desktop-electron.out`、`data/desktop-electron.err`、`data/desktop-vite.out`、`data/desktop-vite.err`；启用 WeFlow 时还可查看 `D:\github\WeFlow\weflow-dev.out` 和 `D:\github\WeFlow\weflow-dev.err`。
 
 ## 微信半自动辅助交互
 
-工作台支持半自动接入普通微信群：
+工作台默认通过截图识别当前打开的微信一对一客服会话：
 
-1. 双击 `启动夏令营Agent.cmd` 打开工作台；启动器会自动配置并启动 WeFlow。
-2. 默认群聊名称为 `沐曦开源英才夏令营咨询群`，如需切换群聊，在左侧填写群聊名称后点击“保存监听配置”。
-3. 点击“开始监听”后，工作台会按轮询间隔自动拉取最近 1 小时内的新消息；也可以点击“拉取新消息”手动排查。
+1. 在微信 PC 中打开需要处理的一对一客服会话。
+2. 双击 `启动夏令营Agent.cmd` 打开工作台；默认启动不依赖 WeFlow，也无需填写群聊名称或保存群聊监听配置。
+3. 工作台通过当前会话截图识别消息并生成回复草稿。
 4. 工作台生成草稿后，可以点击“填入微信”走半自动检查流程。
-5. 如需在测试群验证自动发布，先进入“配置”把发送方式改为“系统自动发送”，再回到主界面点击“自动发布”。
-6. 自动发布只在目标微信群和输入框定位成功后触发回车；目标群未找到、输入框已有内容、填入失败或校验不匹配时会停止发送并降级提示。
+5. 如需在测试会话验证自动发布，先进入“配置”把发送方式改为“系统自动发送”，再回到主界面点击“自动发布”。
+6. 自动发布只在目标微信会话和输入框定位成功后触发回车；目标会话未找到、输入框已有内容、填入失败或校验不匹配时会停止发送并降级提示。
 7. 人工手动发送后，仍可回到工作台点击“我已发送”补记结果。
 
 该能力不会破解微信数据库，不注入微信客户端，不后台群发。若粘贴失败，工作台会降级为复制到剪贴板，请手动粘贴。

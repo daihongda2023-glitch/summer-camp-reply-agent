@@ -52,13 +52,31 @@ class AssistedPasteAdapter:
         except Exception:
             return PasteResult("copied", "已复制到剪贴板，但未能自动粘贴。请手动粘贴到微信输入框。", title)
 
-    def paste_to_wechat_foreground(self, text: str, target_group_name: str = "") -> PasteResult:
+    def paste_to_wechat_foreground(
+        self,
+        text: str,
+        target_group_name: str = "",
+        foreground_only: bool = False,
+    ) -> PasteResult:
         return self._from_compose_result(
-            self.compose_controller.fill_reply(text, target_group_name=target_group_name)
+            self.compose_controller.fill_reply(
+                text,
+                target_group_name=target_group_name,
+                foreground_only=foreground_only,
+            )
         )
 
-    def send_to_wechat_foreground(self, text: str, target_group_name: str = "") -> PasteResult:
-        fill_result = self.compose_controller.fill_reply(text, target_group_name=target_group_name)
+    def send_to_wechat_foreground(
+        self,
+        text: str,
+        target_group_name: str = "",
+        foreground_only: bool = False,
+    ) -> PasteResult:
+        fill_result = self.compose_controller.fill_reply(
+            text,
+            target_group_name=target_group_name,
+            foreground_only=foreground_only,
+        )
         pasted = self._from_compose_result(fill_result)
         if not self._can_auto_send_after_fill(pasted):
             return pasted

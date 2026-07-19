@@ -30,6 +30,7 @@ const fallbackStatus: AppStatus = {
   engine: {
     status: 'idle',
     listener_running: false,
+    use_weflow: false,
     group_name: '未连接',
     send_mode: 'manual_confirm',
     poll_interval_seconds: 5
@@ -39,6 +40,7 @@ const fallbackStatus: AppStatus = {
 }
 
 const fallbackWechatSettings: WeChatBridgeSettings = {
+  use_weflow: false,
   base_url: 'http://127.0.0.1:5031',
   token_env: 'WEFLOW_API_TOKEN',
   group_name: '沐曦开源英才夏令营咨询群',
@@ -51,6 +53,7 @@ const fallbackWechatSettings: WeChatBridgeSettings = {
 }
 
 type WechatForm = {
+  use_weflow: boolean
   group_name: string
   keywordsText: string
   poll_interval_seconds: number
@@ -60,6 +63,7 @@ type WechatForm = {
 function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
   const current = wechat ?? fallbackWechatSettings
   return {
+    use_weflow: current.use_weflow ?? false,
     group_name: current.group_name,
     keywordsText: current.keywords.join(', '),
     poll_interval_seconds: current.poll_interval_seconds,
@@ -130,9 +134,9 @@ function Controller({ status, onRefresh }: { status: AppStatus; onRefresh: () =>
 
       {view.show_target && (
         <section className="panel">
-          <h2>目标群聊</h2>
-          <div className="select-like">{status.engine.group_name || '未连接'}</div>
-          <p className="hint"><span />WeFlow 本地服务</p>
+          <h2>{status.engine.use_weflow ? '目标群聊' : '客服模式'}</h2>
+          <div className="select-like">{status.engine.use_weflow ? status.engine.group_name || '未连接' : '当前微信一对一会话'}</div>
+          <p className="hint"><span />{status.engine.use_weflow ? 'WeFlow 本地服务' : '屏幕截图识别'}</p>
         </section>
       )}
 
@@ -177,9 +181,20 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
 
   useEffect(() => {
     if (!vision.running) return
-    const timer = window.setInterval(refreshItems, Math.max(2000, status.engine.poll_interval_seconds * 1000))
-    return () => window.clearInterval(timer)
-  }, [vision.running, status.engine.poll_interval_seconds])
+    const pollInterval = Math.max(2000, status.engine.poll_interval_seconds * 1000)
+    let cancelled = false
+    let timer = 0
+    const refreshObservedMessagesOnce = status.engine.use_weflow ? refreshItems : captureVision
+    const refreshObservedMessages = async () => {
+      await refreshObservedMessagesOnce()
+      if (!cancelled) timer = window.setTimeout(refreshObservedMessages, pollInterval)
+    }
+    timer = window.setTimeout(refreshObservedMessages, pollInterval)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [vision.running, status.engine.use_weflow, status.engine.poll_interval_seconds])
 
   async function refreshItems() {
     try {
@@ -479,7 +494,7 @@ function SettingsWindow() {
     const groupName = wechatForm.group_name.trim()
     const keywords = wechatForm.keywordsText.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean)
     const pollSeconds = Math.min(60, Math.max(2, Number(wechatForm.poll_interval_seconds) || 5))
-    if (!groupName) {
+    if (wechatForm.use_weflow && !groupName) {
       setWechatMessage('请填写群聊名称')
       return
     }
@@ -487,6 +502,7 @@ function SettingsWindow() {
       ...settings,
       wechat: {
         ...wechat,
+        use_weflow: wechatForm.use_weflow,
         group_name: groupName,
         keywords,
         poll_interval_seconds: pollSeconds,
@@ -495,7 +511,7 @@ function SettingsWindow() {
     })
     setPayload(nextPayload)
     setWechatForm(toWechatForm(nextPayload.wechat))
-    setWechatMessage('微信桥接配置已保存')
+    setWechatMessage(wechatForm.use_weflow ? 'WeFlow 接入配置已保存' : '截图客服配置已保存')
   }
 
   return (
@@ -517,35 +533,45 @@ function SettingsWindow() {
           <Toggle label="工作轨迹" checked={settings.advanced_pages.work_trace} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, work_trace: value } })} />
           <Toggle label="RAG 维护" checked={settings.advanced_pages.rag} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, rag: value } })} />
         </SettingsPanel>
-        <SettingsPanel title="微信桥接">
-          <Field label="群聊" htmlFor="wechatGroupName">
-            <input
-              id="wechatGroupName"
-              value={wechatForm.group_name}
-              onChange={(event) => setWechatForm((current) => ({ ...current, group_name: event.target.value }))}
-            />
-          </Field>
-          <Field label="监听关键字" htmlFor="wechatKeywords">
-            <textarea
-              id="wechatKeywords"
-              rows={3}
-              value={wechatForm.keywordsText}
-              onChange={(event) => setWechatForm((current) => ({ ...current, keywordsText: event.target.value }))}
-            />
-          </Field>
-          <Field label="轮询时间" htmlFor="wechatPollSeconds">
-            <div className="input-with-unit">
-              <input
-                id="wechatPollSeconds"
-                type="number"
-                min={2}
-                max={60}
-                value={wechatForm.poll_interval_seconds}
-                onChange={(event) => setWechatForm((current) => ({ ...current, poll_interval_seconds: Number(event.target.value) }))}
-              />
-              <span>秒</span>
-            </div>
-          </Field>
+        <SettingsPanel title="微信接入">
+          <Toggle
+            label="接入 WeFlow"
+            checked={wechatForm.use_weflow}
+            onChange={(value) => setWechatForm((current) => ({ ...current, use_weflow: value }))}
+          />
+          {wechatForm.use_weflow && (
+            <>
+              <Field label="群聊" htmlFor="wechatGroupName">
+                <input
+                  id="wechatGroupName"
+                  value={wechatForm.group_name}
+                  onChange={(event) => setWechatForm((current) => ({ ...current, group_name: event.target.value }))}
+                />
+              </Field>
+              <Field label="监听关键字" htmlFor="wechatKeywords">
+                <textarea
+                  id="wechatKeywords"
+                  rows={3}
+                  value={wechatForm.keywordsText}
+                  onChange={(event) => setWechatForm((current) => ({ ...current, keywordsText: event.target.value }))}
+                />
+              </Field>
+              <Field label="轮询时间" htmlFor="wechatPollSeconds">
+                <div className="input-with-unit">
+                  <input
+                    id="wechatPollSeconds"
+                    type="number"
+                    min={2}
+                    max={60}
+                    value={wechatForm.poll_interval_seconds}
+                    onChange={(event) => setWechatForm((current) => ({ ...current, poll_interval_seconds: Number(event.target.value) }))}
+                  />
+                  <span>秒</span>
+                </div>
+              </Field>
+              <ReadOnlyLine label="接口" value={String(payload?.wechat.base_url ?? 'http://127.0.0.1:5031')} />
+            </>
+          )}
           <Field label="发送方式" htmlFor="wechatSendMode">
             <select
               id="wechatSendMode"
@@ -556,8 +582,7 @@ function SettingsWindow() {
               <option value="auto_send">系统自动发送</option>
             </select>
           </Field>
-          <ReadOnlyLine label="接口" value={String(payload?.wechat.base_url ?? 'http://127.0.0.1:5031')} />
-          <button className="secondary-action" type="button" onClick={saveWechatSettings}>保存微信桥接</button>
+          <button className="secondary-action" type="button" onClick={saveWechatSettings}>保存微信设置</button>
           {wechatMessage && <p className="save-message" role="status">{wechatMessage}</p>}
         </SettingsPanel>
         <SettingsPanel title="回复模式">

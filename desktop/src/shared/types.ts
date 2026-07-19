@@ -18,6 +18,7 @@ export interface DesktopSettings {
 }
 
 export interface WeChatBridgeSettings {
+  use_weflow: boolean
   base_url: string
   token_env: string
   group_name: string
@@ -39,6 +40,7 @@ export interface AppStatus {
   engine: {
     status: EngineStatus
     listener_running: boolean
+    use_weflow: boolean
     group_name: string
     send_mode: string
     poll_interval_seconds: number

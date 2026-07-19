@@ -16,6 +16,15 @@ $weflowOutLog = Join-Path $weflowRoot 'weflow-dev.out'
 $weflowErrLog = Join-Path $weflowRoot 'weflow-dev.err'
 $desktopLauncher = Join-Path $repoRoot 'scripts\start_desktop_app.ps1'
 
+function Test-WeFlowAutoStartEnabled {
+    param(
+        [AllowNull()]
+        [string]$Value
+    )
+
+    return $Value -ceq '1'
+}
+
 function Get-WorkbenchProcessIdsFromCommandLine {
     $target = 'summer_camp_agent.workbench_server'
     try {
@@ -350,11 +359,14 @@ try {
         Write-Host "[Agent] Confirmed stopped previous workbench process before launch: $processId"
     }
 
-    $token = Ensure-WeFlowConfig
-    $env:WEFLOW_API_TOKEN = $token
-    $env:WEFLOW_CONFIG_PATH = Join-Path (Join-Path $env:APPDATA 'weflow') 'WeFlow-config.json'
-
-    Start-WeFlowHidden
+    if (Test-WeFlowAutoStartEnabled -Value $env:SUMMER_CAMP_AGENT_START_WEFLOW) {
+        $token = Ensure-WeFlowConfig
+        $env:WEFLOW_API_TOKEN = $token
+        $env:WEFLOW_CONFIG_PATH = Join-Path (Join-Path $env:APPDATA 'weflow') 'WeFlow-config.json'
+        Start-WeFlowHidden
+    } else {
+        Write-Host '[Agent] WeFlow startup skipped by default. Set SUMMER_CAMP_AGENT_START_WEFLOW=1 to enable it.'
+    }
 
     $pythonExe = Resolve-PythonExe
     Write-Host "[Agent] Python: $pythonExe"
