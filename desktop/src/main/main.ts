@@ -139,6 +139,11 @@ class PythonService {
     return this.request<PasteReplyResult>('/api/wechat/paste', { event_id: eventId, reply })
   }
 
+  async publishReply(eventId: string, reply: string): Promise<PasteReplyResult> {
+    await this.ensureStarted()
+    return this.request<PasteReplyResult>('/api/wechat/publish', { event_id: eventId, reply })
+  }
+
   async confirmSent(eventId: string, reply: string): Promise<ActionResult> {
     await this.ensureStarted()
     return this.request<ActionResult>('/api/wechat/confirm-sent', { event_id: eventId, reply })
@@ -270,6 +275,7 @@ app.whenReady().then(() => {
   ipcMain.handle('workbench:getItems', () => service.getItems())
   ipcMain.handle('workbench:ask', (_event, question: string) => service.ask(question))
   ipcMain.handle('workbench:pasteReply', (_event, eventId: string, reply: string) => service.pasteReply(eventId, reply))
+  ipcMain.handle('workbench:publishReply', (_event, eventId: string, reply: string) => service.publishReply(eventId, reply))
   ipcMain.handle('workbench:confirmSent', (_event, eventId: string, reply: string) => service.confirmSent(eventId, reply))
   ipcMain.handle('workbench:saveCandidate', (_event, eventId: string, reply: string) => service.saveCandidate(eventId, reply))
   ipcMain.handle('vision:start', () => service.startVision())

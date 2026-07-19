@@ -229,6 +229,22 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
     })
   }
 
+  async function publishReply() {
+    await runAction('正在自动发布...', async () => {
+      if (!selected) {
+        setMessage('请先选择一条消息')
+        return
+      }
+      if (status.engine.send_mode !== 'auto_send') {
+        setMessage('请先在配置中选择系统自动发送')
+        return
+      }
+      const publishReply = getDesktopMethod('publishReply')
+      const result = await publishReply(selected.event_id, replyDraft)
+      setMessage(pasteStatusMessage(result))
+    })
+  }
+
   async function confirmSent() {
     await runAction('正在记录已发送...', async () => {
       if (!selected) {
@@ -383,6 +399,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
           <textarea id="replyDraft" value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} />
           <div className="reply-actions">
             <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
+            <button className="secondary-action compact" type="button" onClick={publishReply}>自动发布</button>
             <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
             <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
           </div>
@@ -410,6 +427,8 @@ function getDesktopMethod<K extends keyof DesktopApi>(name: K): DesktopApi[K] {
 }
 
 function pasteStatusMessage(result: PasteReplyResult) {
+  if (result.paste_action === 'sent_verified') return '已自动发布到微信'
+  if (result.paste_action === 'sent_unverified') return '已自动发布到微信，但未能自动校验输入框内容'
   if (result.paste_action === 'filled_verified') return '已填入并校验，请在微信中检查后手动发送'
   if (result.paste_action === 'filled_unverified') return '已填入但无法自动校验，请人工检查'
   if (result.target_status === 'not_found') return '未找到目标微信群，已复制到剪贴板'

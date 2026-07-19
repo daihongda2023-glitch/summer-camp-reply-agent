@@ -171,6 +171,7 @@ class WindowsComposeBackend:
     KEYEVENTF_KEYUP = 0x0002
     VK_CONTROL = 0x11
     VK_V = 0x56
+    VK_RETURN = 0x0D
     WM_GETTEXT = 0x000D
     WM_GETTEXTLENGTH = 0x000E
     MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -278,6 +279,15 @@ class WindowsComposeBackend:
         self._key_down(self.VK_V)
         self._key_up(self.VK_V)
         self._key_up(self.VK_CONTROL)
+
+    def send_enter(self) -> None:
+        if self.clipboard_backend is not None and hasattr(self.clipboard_backend, "send_enter"):
+            self.clipboard_backend.send_enter()
+            return
+        if sys.platform != "win32":
+            raise OSError("当前平台不支持自动发送")
+        self._key_down(self.VK_RETURN)
+        self._key_up(self.VK_RETURN)
 
     def read_compose_text(self, compose_input: ComposeInput) -> str | None:
         if sys.platform != "win32" or not compose_input.hwnd or not compose_input.can_read:

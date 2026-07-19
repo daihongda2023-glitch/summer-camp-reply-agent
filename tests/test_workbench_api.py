@@ -121,7 +121,11 @@ class WorkbenchApiTest(unittest.TestCase):
     def test_app_status_reflects_start_and_stop(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
 
             idle = state.get_app_status()
             started = state.start_app()
@@ -167,7 +171,10 @@ class WorkbenchApiTest(unittest.TestCase):
             result = state.send_reply(item["event_id"], item["reply"])
 
             self.assertEqual(result["status"], "ok")
-            self.assertIn("报名入口", (root / "logs.jsonl").read_text(encoding="utf-8"))
+            log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("trigger_message_hash", log_text)
+            self.assertIn(item["reply"], log_text)
+            self.assertNotIn("报名入口在哪里？", log_text)
 
     def test_import_jsonl_text_processes_uploaded_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -279,8 +286,8 @@ class FakePasteAdapter:
 
         self.sent.append(text)
         return PasteResult(
-            "filled_verified",
-            "已填入并校验，请在微信中检查后手动发送。",
+            "sent_verified",
+            "已自动发布到微信。",
             "测试群 - 微信",
             target_found=True,
             input_focused=True,
@@ -569,6 +576,54 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
             self.assertIn("filled_verified", log_text)
             self.assertNotIn("auto_sent_to_wechat", log_text)
+            self.assertNotIn("operator_confirmed_sent", log_text)
+
+    def test_publish_reply_requires_auto_send_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+
+            with self.assertRaisesRegex(ValueError, "自动发送"):
+                state.publish_reply(item["event_id"], item["reply"])
+
+        self.assertEqual(state.paste_adapter.sent, [])
+
+    def test_publish_reply_auto_sends_and_logs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+
+            result = state.publish_reply(item["event_id"], item["reply"])
+
+            self.assertEqual(result["paste_action"], "sent_verified")
+            self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+            log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
 
     def test_confirm_sent_records_operator_confirmation(self):

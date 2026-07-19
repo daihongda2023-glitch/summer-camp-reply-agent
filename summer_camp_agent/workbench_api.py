@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from .chat_log_sanitizer import hash_identifier
 from .desktop_settings import DesktopSettings, DesktopSettingsStore
 from .wechat_assisted_paste import AssistedPasteAdapter
-from .wechat_bridge_config import DEFAULT_GROUP_NAME, WeChatBridgeConfig, WeChatBridgeConfigStore
+from .wechat_bridge_config import DEFAULT_GROUP_NAME, SEND_MODE_AUTO_SEND, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
 from .wechat_vision import VisionState, WeChatVisionObserver
 from .wechat_window import WindowsWeChatWindowBackend
@@ -278,6 +278,21 @@ class WorkbenchApiState:
         result = self._call_paste_method(paste_method, reply)
         operator_action = self._operator_action_for_paste_result(result)
         self.session.record_operator_action(item, reply, operator_action=operator_action, action=action)
+        return self._paste_result_payload(result)
+
+    def publish_reply(self, event_id: str, reply: str) -> dict[str, str]:
+        if self.wechat_config.send_mode != SEND_MODE_AUTO_SEND:
+            raise ValueError("请先在配置中选择系统自动发送，再使用自动发布。")
+        item = self._find_item(event_id)
+        publish_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
+        if publish_method is None:
+            raise ValueError("当前粘贴适配器不支持自动发布。")
+        result = self._call_paste_method(publish_method, reply)
+        operator_action = self._operator_action_for_publish_result(result)
+        self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
+        return self._paste_result_payload(result)
+
+    def _paste_result_payload(self, result: Any) -> dict[str, str]:
         return {
             "status": "ok",
             "paste_action": result.action,
@@ -315,6 +330,14 @@ class WorkbenchApiState:
         if action == "copied":
             return "copied_to_clipboard"
         return "fill_failed"
+
+    def _operator_action_for_publish_result(self, result: Any) -> str:
+        action = getattr(result, "action", "")
+        if action in {"sent_verified", "sent_unverified"}:
+            return "auto_sent_to_wechat"
+        if action in {"filled_verified", "filled_unverified"}:
+            return "auto_send_blocked_after_fill"
+        return self._operator_action_for_paste_result(result)
 
     def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
@@ -538,6 +561,9 @@ def create_handler(state: WorkbenchApiState):
                     return
                 if path == "/api/wechat/paste":
                     self._send_json(state.paste_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
+                    return
+                if path == "/api/wechat/publish":
+                    self._send_json(state.publish_reply(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))
                     return
                 if path == "/api/wechat/confirm-sent":
                     self._send_json(state.confirm_sent(str(payload.get("event_id") or ""), str(payload.get("reply") or "")))

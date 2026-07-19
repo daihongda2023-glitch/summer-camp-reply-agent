@@ -149,6 +149,7 @@ export interface DesktopApi {
   getItems(): Promise<WorkbenchItemsPayload>
   ask(question: string): Promise<WorkbenchItemPayload>
   pasteReply(eventId: string, reply: string): Promise<PasteReplyResult>
+  publishReply(eventId: string, reply: string): Promise<PasteReplyResult>
   confirmSent(eventId: string, reply: string): Promise<ActionResult>
   saveCandidate(eventId: string, reply: string): Promise<ActionResult>
   startVision(): Promise<VisionCapturePayload>

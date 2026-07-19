@@ -135,13 +135,14 @@ class WechatCheckedPasteTest(unittest.TestCase):
         self.assertEqual(result.action, "filled_verified")
         self.assertEqual(backend.shortcuts, ["CTRL+V"])
 
-    def test_checked_auto_send_never_presses_enter_for_wechat_foreground(self):
+    def test_checked_auto_send_presses_enter_after_verified_fill(self):
         backend = FakeBackend()
 
         result = AssistedPasteAdapter(backend).send_to_wechat_foreground("同学你好")
 
-        self.assertEqual(result.action, "filled_verified")
-        self.assertEqual(backend.shortcuts, ["CTRL+V"])
+        self.assertEqual(result.action, "sent_verified")
+        self.assertEqual(backend.shortcuts, ["CTRL+V", "ENTER"])
+        self.assertIn("已自动发布", result.message)
 
     def test_checked_auto_send_downgrades_when_foreground_is_not_wechat(self):
         backend = NonWechatBackend()

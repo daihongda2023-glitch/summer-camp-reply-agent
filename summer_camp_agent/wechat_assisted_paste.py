@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 from dataclasses import dataclass
 import sys
+import time
 
 from .wechat_compose import ComposeFillResult, WeChatComposeController, WindowsComposeBackend
 
@@ -57,7 +58,46 @@ class AssistedPasteAdapter:
         )
 
     def send_to_wechat_foreground(self, text: str, target_group_name: str = "") -> PasteResult:
-        return self.paste_to_wechat_foreground(text, target_group_name=target_group_name)
+        fill_result = self.compose_controller.fill_reply(text, target_group_name=target_group_name)
+        pasted = self._from_compose_result(fill_result)
+        if not self._can_auto_send_after_fill(pasted):
+            return pasted
+
+        try:
+            time.sleep(0.15)
+            self.compose_controller.backend.send_enter()
+        except Exception as exc:  # noqa: BLE001
+            return PasteResult(
+                pasted.action,
+                f"已填入微信输入框，但自动发布失败：{exc}",
+                pasted.foreground_window_title,
+                target_found=pasted.target_found,
+                input_focused=pasted.input_focused,
+                filled=pasted.filled,
+                verified=pasted.verified,
+                fallback_reason="send_failed",
+                target_status=pasted.target_status,
+                input_status=pasted.input_status,
+                verification_status=pasted.verification_status,
+            )
+
+        return PasteResult(
+            "sent_verified" if pasted.verified else "sent_unverified",
+            "已自动发布到微信。" if pasted.verified else "已填入但无法自动校验，已按配置自动发布到微信。",
+            pasted.foreground_window_title,
+            target_found=pasted.target_found,
+            input_focused=pasted.input_focused,
+            filled=pasted.filled,
+            verified=pasted.verified,
+            target_status=pasted.target_status,
+            input_status=pasted.input_status,
+            verification_status=pasted.verification_status,
+        )
+
+    def _can_auto_send_after_fill(self, result: PasteResult) -> bool:
+        if not result.filled or not result.input_focused:
+            return False
+        return result.verification_status in {"matched", "unverified"}
 
     def _from_compose_result(self, result: ComposeFillResult) -> PasteResult:
         return PasteResult(

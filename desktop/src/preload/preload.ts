@@ -12,6 +12,7 @@ const desktopApi: DesktopApi = {
   getItems: () => ipcRenderer.invoke('workbench:getItems'),
   ask: (question: string) => ipcRenderer.invoke('workbench:ask', question),
   pasteReply: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:pasteReply', eventId, reply),
+  publishReply: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:publishReply', eventId, reply),
   confirmSent: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:confirmSent', eventId, reply),
   saveCandidate: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:saveCandidate', eventId, reply),
   startVision: () => ipcRenderer.invoke('vision:start'),

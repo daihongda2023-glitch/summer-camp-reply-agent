@@ -116,12 +116,14 @@ test('ipc handlers are registered before the renderer window is created', () => 
 test('desktop api exposes workbench and vision operations', () => {
   const types = read('src/shared/types.ts')
   const preload = read('src/preload/preload.ts')
+  const cjsPreload = read('src/preload/preload.cjs')
   const main = read('src/main/main.ts')
 
   for (const name of [
     'getItems',
     'ask',
     'pasteReply',
+    'publishReply',
     'confirmSent',
     'saveCandidate',
     'startVision',
@@ -131,11 +133,14 @@ test('desktop api exposes workbench and vision operations', () => {
   ]) {
     assert.match(types, new RegExp(`${name}\\(`))
     assert.match(preload, new RegExp(`${name}:`))
+    assert.match(cjsPreload, new RegExp(`${name}:`))
   }
 
   assert.match(main, /ipcMain\.handle\('workbench:getItems'/)
+  assert.match(main, /ipcMain\.handle\('workbench:publishReply'/)
   assert.match(main, /ipcMain\.handle\('vision:capture'/)
   assert.match(main, /\/api\/items/)
+  assert.match(main, /\/api\/wechat\/publish/)
   assert.match(main, /\/api\/vision\/capture/)
 })
 
@@ -150,6 +155,7 @@ test('renderer main window contains the unified desktop workbench', () => {
   assert.match(app, /确认回复草稿/)
   assert.match(app, /选中消息详情/)
   assert.match(app, /填入微信/)
+  assert.match(app, /自动发布/)
   assert.match(app, /我已发送/)
   assert.match(app, /保存候选/)
   assert.match(app, /启动观察/)
@@ -240,6 +246,7 @@ test('workbench button actions surface missing ipc and service errors', () => {
   assert.match(app, /runAction\('正在启动视觉观察\.\.\.'/)
   assert.match(app, /runAction\('正在识别当前窗口\.\.\.'/)
   assert.match(app, /runAction\('正在停止观察\.\.\.'/)
+  assert.match(app, /runAction\('正在自动发布\.\.\.'/)
   assert.match(app, /桌面主进程尚未加载/)
   assert.match(app, /请完全退出并重新启动桌面版/)
   assert.match(app, /errorMessage\(error\)/)
@@ -258,5 +265,6 @@ test('paste result exposes precise compose statuses and safe fill messages', () 
   assert.match(app, /已填入但无法自动校验，请人工检查/)
   assert.match(app, /未找到目标微信群，已复制到剪贴板/)
   assert.match(app, /输入框已有内容，未覆盖/)
-  assert.doesNotMatch(app, /正在自动发送/)
+  assert.match(app, /已自动发布到微信/)
+  assert.match(app, /请先在配置中选择系统自动发送/)
 })
