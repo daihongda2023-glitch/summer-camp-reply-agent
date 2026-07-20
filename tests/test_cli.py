@@ -3,9 +3,46 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
+
+from summer_camp_agent.cli import main
+from summer_camp_agent.gitlink_issue_sync import GitLinkSyncSummary
 
 
 class CLITest(unittest.TestCase):
+    def test_sync_gitlink_command_reports_generated_documents(self):
+        summary = GitLinkSyncSummary(
+            fetched_issues=36,
+            generated_official=8,
+            generated_community=2,
+            skipped_by_reason={"excluded_label:任务": 2},
+            errors=[],
+            repositories=[],
+        )
+        output = StringIO()
+
+        with patch("summer_camp_agent.cli.sync_gitlink_issues", return_value=summary) as sync:
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "sync-gitlink",
+                        "--config",
+                        "sources.json",
+                        "--documents",
+                        "documents",
+                        "--report",
+                        "report.json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        sync.assert_called_once_with("sources.json", "documents", "report.json")
+        self.assertIn("fetched_issues: 36", output.getvalue())
+        self.assertIn("generated_official: 8", output.getvalue())
+        self.assertIn("generated_community: 2", output.getvalue())
+
     def test_ask_command_returns_answer_payload(self):
         completed = subprocess.run(
             [sys.executable, "-B", "-m", "summer_camp_agent.cli", "ask", "报名入口在哪里？"],

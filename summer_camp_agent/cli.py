@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date
 from pathlib import Path
 
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
+from .gitlink_issue_sync import GitLinkSyncError, sync_gitlink_issues
 from .knowledge import KnowledgeBase, KnowledgeValidationError
+from .rag_documents import RagDocumentError
 from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, RagEmbeddingError
 from .rag_index import RagIndexError, build_rag_index, load_rag_index
 from .rag_retriever import RagRetriever
@@ -74,6 +77,26 @@ def main(argv: list[str] | None = None) -> int:
     rag_search_parser.add_argument("--token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
     rag_search_parser.add_argument("--top-k", type=int, default=4, help="返回的候选片段数量")
 
+    sync_gitlink_parser = subparsers.add_parser(
+        "sync-gitlink",
+        help="同步 GitLink Issue 问答并生成 RAG 文档快照",
+    )
+    sync_gitlink_parser.add_argument(
+        "--config",
+        default="data/gitlink_rag_sources.json",
+        help="GitLink 仓库与过滤规则配置",
+    )
+    sync_gitlink_parser.add_argument(
+        "--documents",
+        default="data/rag/documents/gitlink-issues",
+        help="生成文档目录",
+    )
+    sync_gitlink_parser.add_argument(
+        "--report",
+        default="data/rag/gitlink-sync-report.json",
+        help="同步报告路径",
+    )
+
     args = parser.parse_args(argv)
     try:
         if args.command == "ask":
@@ -88,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             return _rag_index(args)
         if args.command == "rag-search":
             return _rag_search(args)
+        if args.command == "sync-gitlink":
+            return _sync_gitlink(args)
     except KnowledgeValidationError as exc:
         print(f"知识库校验失败: {exc}", file=sys.stderr)
         return 1
@@ -95,6 +120,12 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     except RagIndexError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except RagDocumentError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except GitLinkSyncError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     except WeFlowSessionSelectionRequired as exc:
@@ -197,6 +228,18 @@ def _rag_search(args: argparse.Namespace) -> int:
     print("chunks:")
     for index, scored in enumerate(result.chunks, start=1):
         print(f"{index}. score={scored.score:.2f} source={scored.chunk.source_title} heading={scored.chunk.heading}")
+    return 0
+
+
+def _sync_gitlink(args: argparse.Namespace) -> int:
+    summary = sync_gitlink_issues(args.config, args.documents, args.report)
+    print(f"fetched_issues: {summary.fetched_issues}")
+    print(f"generated_official: {summary.generated_official}")
+    print(f"generated_community: {summary.generated_community}")
+    print(f"skipped_by_reason: {json.dumps(summary.skipped_by_reason, ensure_ascii=False)}")
+    print(f"errors: {len(summary.errors)}")
+    print(f"documents: {args.documents}")
+    print(f"report: {args.report}")
     return 0
 
 

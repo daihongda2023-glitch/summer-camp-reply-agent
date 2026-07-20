@@ -42,3 +42,15 @@ python -m summer_camp_agent.cli rag-index --documents data/rag/documents --index
 ```
 
 `data/rag/index/` 是派生索引目录，默认不会提交到 Git。
+
+## GitLink Issue 问答同步
+
+以下命令会读取 `data/gitlink_rag_sources.json`，同步两个课程仓库的 Issue，排除带“任务”标签或标题符合任务、打卡、作业提交等规则的条目，并原子更新 `gitlink-issues/` 快照：
+
+```text
+python scripts/sync_gitlink_issues.py
+```
+
+同步结果写入 `data/rag/gitlink-sync-report.json`。生成文档带有来源 URL、更新时间和可信等级：官方可信作者的明确答复标记为 `official`，可以满足高置信度自动回复条件；社区自行解决经验标记为 `community`，只能作为人工审核建议，不能直接自动回复。
+
+如果网络请求失败、分页响应异常或本次没有生成任何可用问答，命令会失败并保留上次成功快照。单条 Issue 格式异常会记录在同步报告中，其他有效问答仍可更新。
