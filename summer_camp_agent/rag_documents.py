@@ -11,6 +11,11 @@ SKIPPED_PATH_PARTS = (
     ("imports", "chat_logs"),
     ("data", "rag", "index"),
 )
+ALLOWED_GITLINK_TRUST_LEVELS = {"official", "community"}
+
+
+class RagDocumentError(ValueError):
+    """RAG 正式资料的元数据不满足安全约束。"""
 
 
 @dataclass(frozen=True)
@@ -38,10 +43,21 @@ def load_document_chunks(
         raw_text = path.read_text(encoding="utf-8").strip()
         if not raw_text:
             continue
+        metadata, document_text = (
+            _extract_front_matter(raw_text)
+            if path.suffix.lower() == ".md"
+            else ({}, raw_text)
+        )
+        if not document_text:
+            continue
         source_sha256 = _sha256_text(raw_text)
-        source_title = _source_title(path, raw_text)
+        source_title = _source_title(path, document_text)
         relative_path = path.relative_to(root).as_posix()
-        sections = _markdown_sections(raw_text, source_title) if path.suffix.lower() == ".md" else [(source_title, raw_text)]
+        sections = (
+            _markdown_sections(document_text, source_title)
+            if path.suffix.lower() == ".md"
+            else [(source_title, document_text)]
+        )
         for heading, section_text in sections:
             for part in split_text_into_chunks(section_text, target_chars=target_chars, overlap_chars=overlap_chars):
                 chunk_text = _with_heading(heading, part)
@@ -53,6 +69,7 @@ def load_document_chunks(
                         source_sha256=source_sha256,
                         heading=heading,
                         text=chunk_text,
+                        metadata=dict(metadata),
                     )
                 )
     return chunks
@@ -107,6 +124,36 @@ def _contains_subsequence(parts: tuple[str, ...], needle: tuple[str, ...]) -> bo
     if len(parts) < len(needle):
         return False
     return any(parts[index : index + len(needle)] == needle for index in range(len(parts) - len(needle) + 1))
+
+
+def _extract_front_matter(raw_text: str) -> tuple[dict[str, str], str]:
+    normalized = raw_text.lstrip("\ufeff")
+    if not normalized.startswith("---\n"):
+        return {}, normalized
+
+    closing = normalized.find("\n---\n", 4)
+    if closing < 0:
+        raise RagDocumentError("Markdown front matter 缺少结束分隔符。")
+
+    header = normalized[4:closing]
+    body = normalized[closing + 5 :].strip()
+    metadata: dict[str, str] = {}
+    for line in header.splitlines():
+        if not line.strip():
+            continue
+        key, separator, value = line.partition(":")
+        if not separator or not key.strip():
+            raise RagDocumentError(f"front matter 行格式异常：{line}")
+        metadata[key.strip()] = value.strip().strip('"').strip("'")
+
+    if metadata.get("source_type") == "gitlink_issue":
+        trust_level = metadata.get("trust_level", "")
+        if trust_level not in ALLOWED_GITLINK_TRUST_LEVELS:
+            raise RagDocumentError("GitLink 文档 trust_level 必须是 official 或 community。")
+        source_url = metadata.get("source_url", "")
+        if not source_url.startswith("https://www.gitlink.org.cn/"):
+            raise RagDocumentError("GitLink 文档 source_url 必须使用 gitlink.org.cn HTTPS 地址。")
+    return metadata, body
 
 
 def _source_title(path: Path, text: str) -> str:
