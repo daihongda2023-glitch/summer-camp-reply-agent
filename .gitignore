@@ -28,3 +28,6 @@ imports/chat_logs/
 data/rag/index/
 data/weflow_role_map.json
 data/style_profile.json
+
+# 本地隔离开发 worktree
+.worktrees/
