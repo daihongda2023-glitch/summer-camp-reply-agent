@@ -4,11 +4,38 @@ from summer_camp_agent.gitlink_issue_transform import (
     GitLinkSource,
     extract_generated_qas,
     render_generated_qa,
+    sanitize_answer,
     should_exclude_issue,
 )
 
 
 class GitLinkIssueTransformTest(unittest.TestCase):
+    def test_sanitize_answer_removes_all_supported_image_placeholders(self):
+        answer = "有效回答\n![[截屏.png]]\n![截图](https://example.com/a.png)\n<img src=\"a.png\">"
+
+        self.assertEqual(sanitize_answer(answer), "有效回答")
+
+    def test_skips_trusted_author_question_and_tentative_update(self):
+        issue = {
+            "project_issues_index": 6,
+            "subject": "镜像版本需要确认",
+            "description": "",
+            "updated_at": "2026-06-18 15:41",
+            "tags": [],
+        }
+        comments = [
+            {
+                "user": {"login": "topshare"},
+                "notes": "TileLang 使用固定版本还是最新源码？这个需要确定一下。",
+            },
+            {
+                "user": {"login": "yyyymmm"},
+                "notes": "应该需要更新为新镜像，近几天会更新最新指南。",
+            },
+        ]
+
+        self.assertEqual(extract_generated_qas(issue, comments, self.source), [])
+
     def setUp(self):
         self.source = GitLinkSource(
             owner="metax-maca",

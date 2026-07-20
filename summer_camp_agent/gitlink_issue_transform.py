@@ -98,7 +98,8 @@ def extract_generated_qas(issue: dict, comments: list[dict], source: GitLinkSour
 
 
 def sanitize_answer(text: str) -> str:
-    cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    cleaned = re.sub(r"!\[\[[^\]]+\]\]", "", text)
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", cleaned)
     cleaned = re.sub(r"<img\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^\s*用户名\s*[:：].*$", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(
@@ -197,7 +198,12 @@ def _is_conclusive(text: str) -> bool:
         "正在整理",
         "待确认",
         "尽快修复",
+        "这个需要确定",
+        "应该需要",
+        "近几天会更新",
     )
+    if normalized.endswith(("?", "？")):
+        return False
     return not any(phrase in normalized for phrase in pending_phrases)
 
 
