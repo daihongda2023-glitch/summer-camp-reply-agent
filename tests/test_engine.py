@@ -142,6 +142,23 @@ class AnswerEngineTest(unittest.TestCase):
         self.assertEqual(result.action, "needs_info")
         self.assertIn("当前资料还没有明确说明", result.reply)
 
+    def test_community_rag_result_only_creates_suggested_reply(self):
+        rag_result = RagSearchResult(
+            reply="同学你好，以下是社区经验：重新安装 cmake 后构建通过。",
+            source="Intro-ops Issue #15（https://www.gitlink.org.cn/ccf-ai-infra/Intro-ops/issues/15）",
+            confidence=0.99,
+            chunks=[],
+            is_strong=False,
+            trust_level="community",
+            source_url="https://www.gitlink.org.cn/ccf-ai-infra/Intro-ops/issues/15",
+        )
+
+        result = make_engine(rag_retriever=FakeRagRetriever(rag_result)).answer("cmake 构建失败怎么办？")
+
+        self.assertEqual(result.action, "suggested_reply")
+        self.assertEqual(result.intent, "rag.document")
+        self.assertEqual(result.source, rag_result.source)
+
     def test_can_use_custom_answer_provider_chain(self):
         result = AnswerEngine(
             KnowledgeBase.from_default(),

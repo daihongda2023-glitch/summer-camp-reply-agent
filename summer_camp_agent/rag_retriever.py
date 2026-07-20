@@ -24,6 +24,8 @@ class RagSearchResult:
     confidence: float
     chunks: list[ScoredChunk]
     is_strong: bool
+    trust_level: str = "official"
+    source_url: str = ""
 
 
 class RagRetriever:
@@ -57,17 +59,26 @@ class RagRetriever:
             return None
 
         best = top_chunks[0]
+        trust_level = best.chunk.metadata.get("trust_level", "official")
+        source_url = best.chunk.metadata.get("source_url", "")
         return RagSearchResult(
-            reply=format_rag_reply(best.chunk),
+            reply=format_rag_reply(best.chunk, trust_level=trust_level),
             source=format_rag_source(best.chunk),
             confidence=best.score,
             chunks=top_chunks,
-            is_strong=best.score >= self.strong_similarity,
+            is_strong=trust_level == "official" and best.score >= self.strong_similarity,
+            trust_level=trust_level,
+            source_url=source_url,
         )
 
 
-def format_rag_reply(chunk: IndexedChunk) -> str:
+def format_rag_reply(chunk: IndexedChunk, trust_level: str = "official") -> str:
     body = _body_without_heading(chunk)
+    if trust_level == "community":
+        return (
+            f"同学你好，以下是 GitLink Issue 中的社区经验，仅供排查参考：{body}\n\n"
+            f"来源：{format_rag_source(chunk)}。该内容不是官方结论，请联系课程助教确认，并以后续官方答复为准。"
+        )
     return (
         f"同学你好，{body}\n\n"
         f"以上信息来自：{format_rag_source(chunk)}。如果后续官方通知更新，请以后续通知为准。"
@@ -76,8 +87,11 @@ def format_rag_reply(chunk: IndexedChunk) -> str:
 
 def format_rag_source(chunk: IndexedChunk) -> str:
     if chunk.heading and chunk.heading != chunk.source_title:
-        return f"{chunk.source_title} / {chunk.heading}"
-    return chunk.source_title
+        label = f"{chunk.source_title} / {chunk.heading}"
+    else:
+        label = chunk.source_title
+    source_url = chunk.metadata.get("source_url", "")
+    return f"{label}（{source_url}）" if source_url else label
 
 
 def _body_without_heading(chunk: IndexedChunk) -> str:
