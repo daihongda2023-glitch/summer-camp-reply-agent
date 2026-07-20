@@ -16,8 +16,9 @@ class CLITest(unittest.TestCase):
 
         self.assertIn("action: auto_reply", completed.stdout)
         self.assertIn("intent: registration.link", completed.stdout)
-        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", completed.stdout)
-        self.assertIn("source: 招募文章", completed.stdout)
+        self.assertIn("https://developer.metax-tech.com/activities/18", completed.stdout)
+        self.assertNotIn("v.wjx.cn", completed.stdout)
+        self.assertIn("source: 官方咨询群海报", completed.stdout)
 
     def test_validate_command_accepts_default_knowledge_base(self):
         completed = subprocess.run(
@@ -49,7 +50,7 @@ class CLITest(unittest.TestCase):
 
         self.assertIn("recommendation: send", completed.stdout)
         self.assertIn("available_actions: send, edit, escalate, mark_pending", completed.stdout)
-        self.assertIn("source: 招募文章", completed.stdout)
+        self.assertIn("source: 官方咨询群海报", completed.stdout)
 
     def test_review_command_can_save_pending_question(self):
         with tempfile.TemporaryDirectory() as directory:

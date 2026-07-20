@@ -41,12 +41,17 @@
 
 ### 任务 1：更新官方海报结构化 FAQ
 
+**执行补充（用户于 2026-07-20 确认）：** 基线测试暴露出报名 FAQ 在截止日后直接变成“资料未说明”。本任务同时为 `FAQItem` 增加可选 `expired_answer`，并让 `AnswerEngine` 仅在该字段存在时发送明确的过期答复。报名入口和报名截止条目配置该字段；其他过期条目保持不自动回复。
+
 **文件：**
 
 - 修改：`tests/test_engine.py`
 - 修改：`tests/test_cli.py`
+- 修改：`tests/test_knowledge.py`
 - 修改：`data/faq.json`
 - 修改：`docs/knowledge-base/seed-faq.md`
+- 修改：`summer_camp_agent/knowledge.py`
+- 修改：`summer_camp_agent/engine.py`
 
 - [ ] **步骤 1：先写海报知识失败测试**
 
@@ -244,6 +249,22 @@ python -m unittest tests.test_engine.AnswerEngineTest.test_answers_registration_
 ```
 
 更新现有 `faq.interview.schedule`、`faq.offline.time` 和 `faq.offline.location` 的来源及回答，使其与海报一致。`faq.offline.location` 的回答必须同时包含“上海交通大学、沐曦股份”。
+
+同时在 `FAQItem` 中增加 `expired_answer: str`，通过 `str(raw.get("expired_answer", "")).strip()` 读取；`AnswerEngine` 在条目过期时只在 `expired_answer` 非空的情况下返回该答复。`faq.registration.link` 的配置增加：
+
+```json
+"expired_answer": "报名已于 2026 年 7 月 15 日截止。报名通道为：https://developer.metax-tech.com/activities/18，可用于核对已提交的信息；后续安排请关注官方咨询群通知。"
+```
+
+引擎的命中分支使用：
+
+```python
+if item is not None and confidence >= 0.55 and item.auto_reply:
+    if item.is_valid_on(self.today):
+        return self._faq_answer(item, confidence, item.answer)
+    if item.expired_answer:
+        return self._faq_answer(item, confidence, item.expired_answer)
+```
 
 - [ ] **步骤 4：同步更新中文知识库文档**
 

@@ -39,22 +39,29 @@ class AnswerEngine:
             return fallback
 
         item, confidence = self._retrieve(text)
-        if item is None or confidence < 0.55 or not item.auto_reply or not item.is_valid_on(self.today):
-            rag_result = self._retrieve_from_rag(text)
-            if rag_result is not None:
-                return AnswerResult(
-                    action="auto_reply" if rag_result.is_strong else "suggested_reply",
-                    intent="rag.document",
-                    reply=rag_result.reply,
-                    source=rag_result.source,
-                    confidence=rag_result.confidence,
-                )
-            return self._needs_info()
+        if item is not None and confidence >= 0.55 and item.auto_reply:
+            if item.is_valid_on(self.today):
+                return self._faq_answer(item, confidence, item.answer)
+            if item.expired_answer:
+                return self._faq_answer(item, confidence, item.expired_answer)
 
+        rag_result = self._retrieve_from_rag(text)
+        if rag_result is not None:
+            return AnswerResult(
+                action="auto_reply" if rag_result.is_strong else "suggested_reply",
+                intent="rag.document",
+                reply=rag_result.reply,
+                source=rag_result.source,
+                confidence=rag_result.confidence,
+            )
+        return self._needs_info()
+
+    @staticmethod
+    def _faq_answer(item: FAQItem, confidence: float, reply: str) -> AnswerResult:
         return AnswerResult(
             action="auto_reply",
             intent=item.intent,
-            reply=item.answer,
+            reply=reply,
             source=f"{item.source}（{item.source_date}，最后更新 {item.last_updated}）",
             confidence=confidence,
         )

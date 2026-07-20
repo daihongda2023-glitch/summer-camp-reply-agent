@@ -38,13 +38,31 @@ def make_engine(today=date(2026, 6, 20), rag_retriever=None):
 
 
 class AnswerEngineTest(unittest.TestCase):
-    def test_answers_registration_link_from_seed_faq(self):
-        result = make_engine().answer("报名入口在哪里？")
+    def test_answers_registration_link_from_latest_official_poster_before_deadline(self):
+        result = make_engine(today=date(2026, 7, 15)).answer("报名入口在哪里？")
 
         self.assertEqual(result.action, "auto_reply")
         self.assertEqual(result.intent, "registration.link")
-        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", result.reply)
-        self.assertIn("招募文章", result.source)
+        self.assertIn("https://developer.metax-tech.com/activities/18", result.reply)
+        self.assertNotIn("v.wjx.cn", result.reply)
+        self.assertIn("官方咨询群海报", result.source)
+
+    def test_answers_latest_course_and_camp_schedule(self):
+        cases = [
+            ("线上学习和作业什么时候截止？", "2026 年 7 月 20 日"),
+            ("课程1在哪里学习？", "https://www.gitlink.org.cn/ccf-ai-infra/Intro-ops"),
+            ("作业1在哪里提交？", "https://www.gitlink.org.cn/ccf-ai-infra/Intro-ops/issues/16"),
+            ("课程2的作业入口是什么？", "https://www.gitlink.org.cn/metax-maca/op_optimization/issues/12"),
+            ("课程直播是什么时间？", "7 月 13 日至 7 月 15 日，每晚 19:00—21:00"),
+            ("作业提交账号怎么获得？", "报名时使用的邮箱"),
+            ("线下夏令营什么时候在哪里？", "2026 年 8 月 3 日至 8 月 7 日"),
+            ("群昵称建议改成什么？", "姓名-学校-年级"),
+        ]
+        for question, expected in cases:
+            with self.subTest(question=question):
+                result = make_engine(today=date(2026, 7, 15)).answer(question)
+                self.assertEqual(result.action, "auto_reply")
+                self.assertIn(expected, result.reply)
 
     def test_returns_miss_for_unknown_question_without_claiming_recorded(self):
         result = make_engine().answer("营服是什么颜色？")
@@ -67,8 +85,16 @@ class AnswerEngineTest(unittest.TestCase):
         self.assertEqual(result.reason, "technical_assignment")
         self.assertIn("技术作业", result.reply)
 
-    def test_expired_auto_reply_is_not_sent(self):
+    def test_expired_registration_uses_explicit_expired_answer(self):
         result = make_engine(today=date(2026, 7, 16)).answer("报名入口在哪里？")
+
+        self.assertEqual(result.action, "auto_reply")
+        self.assertEqual(result.intent, "registration.link")
+        self.assertIn("报名已于 2026 年 7 月 15 日截止", result.reply)
+        self.assertIn("https://developer.metax-tech.com/activities/18", result.reply)
+
+    def test_expired_item_without_expired_answer_is_not_sent(self):
+        result = make_engine(today=date(2026, 8, 8)).answer("线下夏令营什么时候举办？")
 
         self.assertEqual(result.action, "needs_info")
         self.assertIn("当前资料还没有明确说明", result.reply)
@@ -106,7 +132,8 @@ class AnswerEngineTest(unittest.TestCase):
 
         self.assertEqual(result.action, "auto_reply")
         self.assertEqual(result.intent, "registration.link")
-        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", result.reply)
+        self.assertIn("https://developer.metax-tech.com/activities/18", result.reply)
+        self.assertNotIn("v.wjx.cn", result.reply)
         self.assertEqual(rag.questions, [])
 
     def test_returns_needs_info_when_rag_misses(self):

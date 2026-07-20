@@ -32,7 +32,8 @@ class WorkbenchSessionTest(unittest.TestCase):
 
         self.assertTrue(item.trigger.should_process)
         self.assertEqual(item.reply_decision.mode, "draft")
-        self.assertIn("报名入口", item.review_card.reply)
+        self.assertIn("报名已于 2026 年 7 月 15 日截止", item.review_card.reply)
+        self.assertIn("https://developer.metax-tech.com/activities/18", item.review_card.reply)
 
     def test_untriggered_event_is_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

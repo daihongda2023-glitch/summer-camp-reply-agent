@@ -23,7 +23,8 @@ class DesktopChatSessionTest(unittest.TestCase):
 
         self.assertEqual(message.recommendation, "send")
         self.assertIn("建议动作：send", message.display_text)
-        self.assertIn("当前资料中的报名入口为", message.display_text)
+        self.assertIn("报名已于 2026 年 7 月 15 日截止", message.display_text)
+        self.assertIn("https://developer.metax-tech.com/activities/18", message.display_text)
 
     def test_unknown_question_can_be_saved_as_pending(self):
         with tempfile.TemporaryDirectory() as directory:

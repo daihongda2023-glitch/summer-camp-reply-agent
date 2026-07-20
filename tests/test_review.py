@@ -21,8 +21,9 @@ class OperatorReviewTest(unittest.TestCase):
         self.assertEqual(card.action, "auto_reply")
         self.assertIn("send", card.available_actions)
         self.assertIn("edit", card.available_actions)
-        self.assertIn("招募文章", card.source)
-        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", card.reply)
+        self.assertIn("官方咨询群海报", card.source)
+        self.assertIn("https://developer.metax-tech.com/activities/18", card.reply)
+        self.assertNotIn("v.wjx.cn", card.reply)
 
     def test_unknown_question_recommends_mark_pending_without_record_claim(self):
         card = make_review().create_card("营服是什么颜色？")

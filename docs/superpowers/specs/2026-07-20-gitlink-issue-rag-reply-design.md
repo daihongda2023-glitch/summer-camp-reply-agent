@@ -109,6 +109,8 @@ flowchart LR
 
 旧报名链接 `https://v.wjx.cn/vm/r9BqUzR.aspx#` 不再作为有效回复来源。
 
+报名入口和截止时间条目增加可选的 `expired_answer`：报名截止后仍应明确告知“报名已于 2026 年 7 月 15 日截止”，并提供最新报名入口供用户核对已提交信息，不能退化为“当前资料未说明”。未配置 `expired_answer` 的其他过期条目继续按原安全策略停止自动回复。
+
 ## 8. GitLink 同步器
 
 ### 8.1 配置
@@ -209,6 +211,8 @@ answer_author: organizer
 2. 结构化 FAQ。
 3. RAG 文档。
 4. 未命中回复。
+
+结构化 FAQ 命中后，未过期时使用 `answer`；已过期且存在 `expired_answer` 时使用明确的历史状态答复；已过期且没有 `expired_answer` 时继续检索 RAG，仍未命中则返回未命中回复。
 
 RAG 命中后增加来源可信等级判断：
 
