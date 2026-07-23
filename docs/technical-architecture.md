@@ -152,19 +152,41 @@ status: open | resolved | added_to_kb | ignored
 
 当前微信工作台采用以下固定顺序处理命中触发规则的消息：
 
-1. 必须人工处理的问题优先进入人工队列。
-2. FAQ 命中时直接使用已审核答案，不调用外部 AI。
-3. FAQ 未命中时检索本地 RAG 文档。
-4. 只有高置信且标记为 `official` 的资料才交给 OpenAI 生成自然语言回复。
-5. AI 生成内容必须通过依据性、长度和链接检查，才允许自动发送。
-6. AI 超时、不可用、配额不足或输出校验失败时，自动降级为对应的官方 RAG 原文。
-7. `community` 资料只作为运营参考，未知问题进入待补充队列，两者都不自动发送。
+1. 医疗安全、投诉、个人录取状态和作业代写等必须人工处理的问题先执行硬规则拦截，不发送给外部 AI。
+2. 其余问题先由 AI 识别标准问题、意图、FAQ 候选、RAG 候选和检索改写。
+3. 发送给语义分析器的知识目录只包含 FAQ 问题与别名，以及 RAG 文档块的 ID、可信级别和标题，不包含 RAG 正文。
+4. 系统只接受目录中真实存在的唯一候选，并分别按 FAQ 和 RAG 语义阈值校验；AI 不能直接提供事实答案。
+5. FAQ 候选通过校验时直接使用已审核答案；否则由本地 RAG 对 AI 选择的官方文档块重新取证。
+6. 只有高置信且标记为 `official` 的 RAG 证据才交给 OpenAI 生成自然语言回复。
+7. AI 生成内容必须通过依据性、长度和链接检查，才允许自动发送。
+8. `community` 资料只作为运营参考；没有充分证据的问题进入持久化待处理队列，不自动发送。
 
 回复日志和工作台详情会记录：
 
-- `generation_mode`：`faq`、`rag_ai`、`rag_fallback`、`rag_community`、`needs_info` 或 `human_fallback`。
+- `generation_mode`：`faq`、`rag_ai`、`rag_fallback`、`rag_insufficient`、`rag_community`、`needs_info` 或 `human_fallback`。
 - `generation_model`：实际配置的 AI 模型。
 - `generation_error`：安全化后的降级原因，例如 `timeout`、`insufficient_quota`、`unsupported_url`。
+- `semantic_confidence`：AI 对语义归一化与目录候选选择的置信度，不代表资料本身正确。
+- `faq_confidence`：原始问题与 FAQ 问题、别名和关键词的本地词面匹配分。
+- `rag_confidence`：原始问题与最终选中文档块的本地词面匹配分；AI 语义选中资料时，该分数可以较低。
+- `semantic_status`、`semantic_intent`、`semantic_question`、`semantic_model` 和 `semantic_error`：用于解释语义识别结果及降级原因。
+
+### 降级边界
+
+- 语义分析或回答生成服务超时、网络不可用、配额不足时，系统保留原有本地 FAQ/RAG 能力；高置信官方 RAG 可以降级使用已审核的官方原文。
+- AI 返回 `not_grounded` 表示已有资料与问题相关，但资料不足以支持具体结论。系统会生成“已确认事实 + 尚未说明部分 + 核查渠道”的保守草稿，标记为 `rag_insufficient` 并进入待处理队列，不自动发送。
+- AI 返回未知候选 ID、多个候选、危险检索改写或越界字段时，语义结果作废并回退本地检索。
+
+### 持久化待处理收件箱
+
+监听器拉到新消息后，系统先将原始 `ChatEvent` 原子写入 `data/workbench_inbox.jsonl`，再生成审核卡和回复决策：
+
+1. 未回复、发送失败或证据不足的消息保留在收件箱。
+2. 自动发送成功或运营确认已发送后，从收件箱删除对应事件。
+3. 工作台重启时从收件箱恢复消息并重新生成审核卡，但不会因恢复动作重复自动发送。
+4. 收件箱按事件 ID 去重，最多保留 500 条；临时文件写完后再替换正式文件，避免半写入状态。
+
+`data/workbench_inbox.jsonl` 属于运行数据，已加入忽略规则，不提交到仓库。
 
 ### OpenAI 配置
 
@@ -185,4 +207,12 @@ python -m scripts.verify_rag_ai_reply
 ```
 
 该脚本不会操作真实微信窗口。验证成功时，三个官方 RAG 场景都应显示 `generation_mode=rag_ai` 并完成模拟自动发送；如果 OpenAI 不可用，脚本会失败并报告安全化原因，业务运行时仍会按上述规则降级回复。
+
+截图中三个现场问题的可重复语义闭环使用以下命令：
+
+```text
+python -m scripts.verify_semantic_reply_scenarios
+```
+
+该脚本使用确定性的语义分析与回答生成替身，不调用真实微信或 OpenAI。它验证两条有充分依据的问题完成模拟自动发送，评分原因证据不足的问题进入待处理队列，并在工作台重启后仍能恢复。
 
