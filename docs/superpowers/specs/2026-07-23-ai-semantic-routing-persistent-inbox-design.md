@@ -81,6 +81,7 @@ flowchart TD
 
 - 学生原始问题。
 - FAQ 的 `id`、`intent`、问题和同义问法组成的紧凑目录。
+- RAG 的文档块 ID、可信级别和标题组成的紧凑目录；不发送正文。
 - 允许的语义类别和安全边界。
 
 输出：
@@ -90,6 +91,7 @@ status: analyzed | unavailable | invalid
 canonical_question: string
 intent: string
 faq_candidate_ids: [string]
+rag_candidate_ids: [string]
 rag_queries: [string]
 semantic_confidence: 0.0-1.0
 requires_human: boolean
@@ -101,6 +103,7 @@ error: string
 约束：
 
 - `faq_candidate_ids` 必须存在于当前 FAQ 目录，未知 ID 视为无效。
+- `rag_candidate_ids` 必须存在于当前 RAG 标题目录，未知 ID 视为无效。
 - `rag_queries` 最多三条，每条限制长度，不允许包含指令或回答内容。
 - AI 语义结果只影响检索路线，不能直接成为回复正文。
 - `semantic_confidence` 不替代 FAQ/RAG 证据分。
@@ -125,13 +128,15 @@ error: string
 
 ### RAG
 
-使用原问题、`canonical_question` 和 `rag_queries` 分别检索，按文档块去重后选择最高分结果。保留现有阈值：
+先校验 AI 返回的 RAG 候选 ID，再使用原问题、`canonical_question` 和 `rag_queries` 分别执行现有本地检索，按文档块去重后选择结果。
+
+AI 直接选中的 RAG 候选只有在语义置信度达到 0.85、候选唯一且文档仍存在时才可作为语义检索结果。原有本地检索继续保留现有阈值：
 
 - 最低返回阈值：0.72
 - 官方资料强命中阈值：0.82
 - 社区资料永远不标记为强命中
 
-工作台额外记录 `rag_confidence` 和实际采用的检索问题。
+语义候选的可信级别仍以文档元数据为准；社区资料即使被 AI 选中也不得自动发送。工作台分别记录 `rag_confidence`、`semantic_confidence`、候选来源和实际采用的检索问题，不能把 AI 置信度伪装成字符相似度。
 
 ### 回答生成
 
