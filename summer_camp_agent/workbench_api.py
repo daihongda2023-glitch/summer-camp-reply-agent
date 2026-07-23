@@ -22,6 +22,10 @@ from .workbench_presenter import build_demo_events, format_item_summary, status_
 from .work_trace import load_work_trace
 from .workbench_session import DEFAULT_CANDIDATE_PATH, DEFAULT_LOG_PATH, DEFAULT_TRACE_PATH, WorkbenchItem, WorkbenchSession
 from .workbench_sources import load_events_from_jsonl_text
+from .workbench_store import WorkbenchInboxStore
+
+
+DEFAULT_INBOX_PATH = Path(__file__).resolve().parents[1] / "data" / "workbench_inbox.jsonl"
 
 
 class WorkbenchApiState:
@@ -30,6 +34,7 @@ class WorkbenchApiState:
         candidate_path: str | Path = DEFAULT_CANDIDATE_PATH,
         log_path: str | Path = DEFAULT_LOG_PATH,
         trace_path: str | Path | None = None,
+        inbox_path: str | Path | None = None,
         group_config: GroupConfig | None = None,
         wechat_config_path: str | Path | None = None,
         desktop_settings_path: str | Path | None = None,
@@ -58,6 +63,20 @@ class WorkbenchApiState:
         )
         self.wechat_config = self.wechat_config_store.load()
         self._sync_group_config_from_wechat()
+        resolved_inbox_path = (
+            Path(inbox_path)
+            if inbox_path is not None
+            else (
+                isolated_data_root / "workbench_inbox.jsonl"
+                if isolated_data_root is not None
+                else DEFAULT_INBOX_PATH
+            )
+        )
+        self.inbox_store = WorkbenchInboxStore(resolved_inbox_path)
+        self.items = [
+            self.session.process_event(event)
+            for event in self.inbox_store.load()
+        ]
         self.wechat_listener = None
         self.wechat_listener_running = False
         self._poll_lock = RLock()
@@ -485,6 +504,7 @@ class WorkbenchApiState:
         for event in events:
             if event.event_id in existing_ids:
                 continue
+            self.inbox_store.upsert(event)
             item = self.session.process_event(event)
             self.items.append(item)
             existing_ids.add(event.event_id)
@@ -498,6 +518,10 @@ class WorkbenchApiState:
 
     def _mark_event_replied(self, event_id: str, reply: str = "") -> None:
         self._replied_event_ids.add(event_id)
+        try:
+            self.inbox_store.remove(event_id)
+        except OSError as exc:
+            self.recent_logs.append(f"清理工作台收件箱失败：{exc}")
         mark_replied = getattr(self.wechat_listener, "mark_replied", None)
         if mark_replied is None:
             return

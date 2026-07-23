@@ -3,11 +3,63 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.workbench_models import ReplyCandidate, ReplyLogEntry
-from summer_camp_agent.workbench_store import ReplyCandidateStore, ReplyLogStore
+from summer_camp_agent.workbench_models import ChatEvent, ReplyCandidate, ReplyLogEntry
+from summer_camp_agent.workbench_store import (
+    ReplyCandidateStore,
+    ReplyLogStore,
+    WorkbenchInboxStore,
+)
+
+
+def chat_event(event_id, content):
+    return ChatEvent(
+        event_id=event_id,
+        group_id_hash="sha256:group",
+        group_name="测试群",
+        sender_alias="成员001",
+        sender_role="student",
+        message_time="2026-07-23 12:00:00",
+        content=content,
+        raw_type="text",
+        source="weflow_live",
+    )
 
 
 class WorkbenchStoreTest(unittest.TestCase):
+    def test_inbox_upserts_deduplicates_caps_and_removes_chat_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "workbench_inbox.jsonl"
+            store = WorkbenchInboxStore(path, max_items=2)
+            store.upsert(chat_event("evt-1", "问题一？"))
+            store.upsert(chat_event("evt-1", "问题一更新？"))
+            store.upsert(chat_event("evt-2", "问题二？"))
+            store.upsert(chat_event("evt-3", "问题三？"))
+
+            loaded = store.load()
+            store.remove("evt-2")
+            remaining = store.load()
+
+        self.assertEqual(
+            [(item.event_id, item.content) for item in loaded],
+            [("evt-2", "问题二？"), ("evt-3", "问题三？")],
+        )
+        self.assertEqual([item.event_id for item in remaining], ["evt-3"])
+
+    def test_inbox_ignores_corrupt_rows_and_preserves_valid_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "workbench_inbox.jsonl"
+            valid = chat_event("evt-valid", "有效问题？")
+            path.write_text(
+                "{not-json}\n"
+                + json.dumps(valid.__dict__, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = WorkbenchInboxStore(path).load()
+
+        self.assertEqual([item.event_id for item in loaded], ["evt-valid"])
+
     def test_saves_reply_candidate_as_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reply_candidates.jsonl"

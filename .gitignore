@@ -16,6 +16,7 @@ data/chat_groups.json
 data/reply_candidates.jsonl
 data/reply_logs.jsonl
 data/work_trace.jsonl
+data/workbench_inbox.jsonl
 data/listener_state.json
 data/wechat_bridge_config.json
 data/desktop_settings.json

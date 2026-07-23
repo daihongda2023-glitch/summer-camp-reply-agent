@@ -337,6 +337,103 @@ class FakeRagAnswerGenerator:
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
+    def test_unreplied_listener_event_survives_api_state_restart(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-persisted-pending",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-23 12:00:00",
+            "XPUOJ测评 MoE 耗时减少了但是分数反而降低了？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "wechat_bridge_config.json"
+            first = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+            first.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["测试"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "send_mode": "auto_send",
+                }
+            )
+            first.wechat_listener = FakeListener([event])
+
+            first_payload = first.poll_wechat_once()
+            restarted = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+            restored = restarted.list_items()["items"]
+
+        self.assertEqual(first_payload["items"][0]["status"], "待补充")
+        self.assertEqual([item["question"] for item in restored], [event.content])
+        self.assertEqual(restored[0]["status"], "待补充")
+
+    def test_successfully_replied_listener_event_is_removed_from_persistent_inbox(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-persisted-replied",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-23 12:01:00",
+            "线下夏令营在哪？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "wechat_bridge_config.json"
+            first = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+            first.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["测试"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "send_mode": "auto_send",
+                }
+            )
+            first.paste_adapter = FakePasteAdapter()
+            first.wechat_listener = FakeListener([event])
+
+            first.poll_wechat_once()
+            inbox_path = root / "workbench_inbox.jsonl"
+            restarted = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=config_path,
+            )
+
+            self.assertTrue(inbox_path.exists())
+            self.assertEqual(inbox_path.read_text(encoding="utf-8"), "")
+            self.assertEqual(restarted.list_items()["items"], [])
+
     def test_start_listener_uses_saved_wechat_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
