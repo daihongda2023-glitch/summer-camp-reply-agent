@@ -26,6 +26,15 @@ class OperatorReviewTest(unittest.TestCase):
                     generation_mode="rag_ai",
                     generation_model="fake-model",
                     generation_error="",
+                    semantic_status="analyzed",
+                    semantic_intent="support.contact",
+                    semantic_question="遇到比赛问题应该联系谁？",
+                    semantic_confidence=0.94,
+                    semantic_model="semantic-model",
+                    semantic_error="",
+                    faq_confidence=0.50,
+                    rag_confidence=0.20,
+                    rag_query="比赛问题 联系人",
                 )
 
         card = OperatorReview(StaticEngine()).create_card("比赛镜像能下载吗？")
@@ -33,6 +42,14 @@ class OperatorReviewTest(unittest.TestCase):
         self.assertEqual(card.generation_mode, "rag_ai")
         self.assertEqual(card.generation_model, "fake-model")
         self.assertEqual(card.generation_error, "")
+        self.assertEqual(card.semantic_status, "analyzed")
+        self.assertEqual(card.semantic_intent, "support.contact")
+        self.assertEqual(card.semantic_question, "遇到比赛问题应该联系谁？")
+        self.assertEqual(card.semantic_confidence, 0.94)
+        self.assertEqual(card.semantic_model, "semantic-model")
+        self.assertEqual(card.faq_confidence, 0.50)
+        self.assertEqual(card.rag_confidence, 0.20)
+        self.assertEqual(card.rag_query, "比赛问题 联系人")
 
     def test_auto_reply_question_recommends_send(self):
         card = make_review().create_card("报名入口在哪里？")

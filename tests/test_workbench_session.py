@@ -24,6 +24,19 @@ class FakeRagAnswerGenerator:
 
 
 class WorkbenchSessionTest(unittest.TestCase):
+    def test_session_passes_injected_semantic_analyzer_to_default_engine(self):
+        analyzer = object()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(group_name="夏令营咨询群"),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                semantic_analyzer=analyzer,
+            )
+
+        self.assertIs(session.review.engine.semantic_analyzer, analyzer)
+
     def test_session_passes_injected_generator_to_default_engine(self):
         generator = FakeRagAnswerGenerator()
         with tempfile.TemporaryDirectory() as directory:

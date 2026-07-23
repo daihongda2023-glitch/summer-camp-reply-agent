@@ -8,6 +8,7 @@ from .rag_documents import load_document_chunks
 from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
 from .rag_index import CHUNKS_FILE, MANIFEST_FILE, RagIndexError, load_rag_index
 from .rag_retriever import LocalDocumentRagRetriever, RagRetriever
+from .semantic_router import OpenAISemanticAnalyzer, SemanticAnalyzer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,10 @@ def load_optional_rag_retriever(
 
 def load_default_rag_answer_generator() -> RagAnswerGenerator | None:
     return OpenAIRagAnswerGenerator.from_env()
+
+
+def load_default_semantic_analyzer() -> SemanticAnalyzer | None:
+    return OpenAISemanticAnalyzer.from_env()
 
 
 @lru_cache(maxsize=1)

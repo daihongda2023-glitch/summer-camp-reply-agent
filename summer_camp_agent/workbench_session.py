@@ -45,6 +45,7 @@ class WorkbenchSession:
         trace_path: str | Path | None = None,
         review: OperatorReview | None = None,
         rag_answer_generator=None,
+        semantic_analyzer=None,
     ):
         self.group_config = group_config
         self.trigger_engine = TriggerEngine(group_config)
@@ -53,6 +54,7 @@ class WorkbenchSession:
                 KnowledgeBase.from_default(),
                 rag_retriever=load_default_rag_retriever(),
                 rag_answer_generator=rag_answer_generator,
+                semantic_analyzer=semantic_analyzer,
             )
         )
         self.reply_modes = ReplyModeController(group_config)
@@ -108,6 +110,15 @@ class WorkbenchSession:
                 "generation_mode": card.generation_mode,
                 "generation_model": card.generation_model,
                 "generation_error": card.generation_error,
+                "semantic_status": card.semantic_status,
+                "semantic_intent": card.semantic_intent,
+                "semantic_question": card.semantic_question,
+                "semantic_confidence": card.semantic_confidence,
+                "semantic_model": card.semantic_model,
+                "semantic_error": card.semantic_error,
+                "faq_confidence": card.faq_confidence,
+                "rag_confidence": card.rag_confidence,
+                "rag_query": card.rag_query,
             },
         )
         return WorkbenchItem(event=event, trigger=trigger, review_card=card, reply_decision=decision)
@@ -150,6 +161,15 @@ class WorkbenchSession:
                 generation_mode=item.review_card.generation_mode,
                 generation_model=item.review_card.generation_model,
                 generation_error=item.review_card.generation_error,
+                semantic_status=item.review_card.semantic_status,
+                semantic_intent=item.review_card.semantic_intent,
+                semantic_question=item.review_card.semantic_question,
+                semantic_confidence=item.review_card.semantic_confidence,
+                semantic_model=item.review_card.semantic_model,
+                semantic_error=item.review_card.semantic_error,
+                faq_confidence=item.review_card.faq_confidence,
+                rag_confidence=item.review_card.rag_confidence,
+                rag_query=item.review_card.rag_query,
             )
         )
 
@@ -217,6 +237,15 @@ class WorkbenchSession:
                 generation_mode=item.review_card.generation_mode,
                 generation_model=item.review_card.generation_model,
                 generation_error=item.review_card.generation_error,
+                semantic_status=item.review_card.semantic_status,
+                semantic_intent=item.review_card.semantic_intent,
+                semantic_question=item.review_card.semantic_question,
+                semantic_confidence=item.review_card.semantic_confidence,
+                semantic_model=item.review_card.semantic_model,
+                semantic_error=item.review_card.semantic_error,
+                faq_confidence=item.review_card.faq_confidence,
+                rag_confidence=item.review_card.rag_confidence,
+                rag_query=item.review_card.rag_query,
             )
         )
 

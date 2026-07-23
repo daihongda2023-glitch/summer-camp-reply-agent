@@ -67,6 +67,15 @@ class ReplyLogEntry:
     generation_mode: str = ""
     generation_model: str = ""
     generation_error: str = ""
+    semantic_status: str = ""
+    semantic_intent: str = ""
+    semantic_question: str = ""
+    semantic_confidence: float = 0.0
+    semantic_model: str = ""
+    semantic_error: str = ""
+    faq_confidence: float = 0.0
+    rag_confidence: float = 0.0
+    rag_query: str = ""
 
 
 @dataclass(frozen=True)

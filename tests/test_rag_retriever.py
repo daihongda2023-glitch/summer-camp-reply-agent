@@ -7,7 +7,10 @@ from summer_camp_agent.rag_embeddings import StaticEmbeddingProvider
 from summer_camp_agent.rag_index import build_rag_index, load_rag_index
 from summer_camp_agent.rag_documents import load_document_chunks
 from summer_camp_agent.rag_retriever import LocalDocumentRagRetriever, RagRetriever
-from summer_camp_agent.rag_runtime import load_default_rag_answer_generator
+from summer_camp_agent.rag_runtime import (
+    load_default_rag_answer_generator,
+    load_default_semantic_analyzer,
+)
 
 
 class RagRetrieverTest(unittest.TestCase):
@@ -31,6 +34,27 @@ class RagRetrieverTest(unittest.TestCase):
     def test_default_rag_answer_generator_is_optional_without_key(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(load_default_rag_answer_generator())
+
+    def test_default_semantic_analyzer_uses_same_openai_environment(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_CHAT_MODEL": "gpt-test",
+                "OPENAI_BASE_URL": "https://example.test/v1",
+            },
+            clear=True,
+        ):
+            analyzer = load_default_semantic_analyzer()
+
+        self.assertIsNotNone(analyzer)
+        assert analyzer is not None
+        self.assertEqual(analyzer.model, "gpt-test")
+        self.assertEqual(analyzer.base_url, "https://example.test/v1")
+
+    def test_default_semantic_analyzer_is_optional_without_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(load_default_semantic_analyzer())
 
     def test_local_document_retriever_matches_exact_official_issue_without_embeddings(self):
         with tempfile.TemporaryDirectory() as directory:

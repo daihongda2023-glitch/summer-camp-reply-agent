@@ -39,6 +39,7 @@ class WorkbenchApiState:
         wechat_config_path: str | Path | None = None,
         desktop_settings_path: str | Path | None = None,
         rag_answer_generator=None,
+        semantic_analyzer=None,
     ):
         self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
         self.trace_path = Path(trace_path) if trace_path is not None else self._default_trace_path(candidate_path)
@@ -48,6 +49,7 @@ class WorkbenchApiState:
             log_path=log_path,
             trace_path=self.trace_path,
             rag_answer_generator=rag_answer_generator,
+            semantic_analyzer=semantic_analyzer,
         )
         self.items: list[WorkbenchItem] = []
         isolated_data_root = Path(candidate_path).parent if Path(candidate_path) != DEFAULT_CANDIDATE_PATH else None
@@ -579,6 +581,15 @@ def serialize_item(item: WorkbenchItem, *, replied: bool = False) -> dict[str, A
         "generation_mode": item.review_card.generation_mode,
         "generation_model": item.review_card.generation_model,
         "generation_error": item.review_card.generation_error,
+        "semantic_status": item.review_card.semantic_status,
+        "semantic_intent": item.review_card.semantic_intent,
+        "semantic_question": item.review_card.semantic_question,
+        "semantic_confidence": item.review_card.semantic_confidence,
+        "semantic_model": item.review_card.semantic_model,
+        "semantic_error": item.review_card.semantic_error,
+        "faq_confidence": item.review_card.faq_confidence,
+        "rag_confidence": item.review_card.rag_confidence,
+        "rag_query": item.review_card.rag_query,
         "reason": item.reply_decision.reason or item.review_card.reason,
     }
 

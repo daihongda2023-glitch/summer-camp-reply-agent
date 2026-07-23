@@ -103,6 +103,15 @@ class WorkbenchStoreTest(unittest.TestCase):
                 generation_mode="rag_ai",
                 generation_model="gpt-test",
                 generation_error="",
+                semantic_status="analyzed",
+                semantic_intent="support.contact",
+                semantic_question="遇到比赛问题应该联系谁？",
+                semantic_confidence=0.94,
+                semantic_model="semantic-test",
+                semantic_error="",
+                faq_confidence=0.50,
+                rag_confidence=0.20,
+                rag_query="比赛问题 联系人",
             )
 
             store.append(entry)
@@ -114,6 +123,11 @@ class WorkbenchStoreTest(unittest.TestCase):
         self.assertEqual(rows[0]["generation_mode"], "rag_ai")
         self.assertEqual(rows[0]["generation_model"], "gpt-test")
         self.assertEqual(rows[0]["generation_error"], "")
+        self.assertEqual(rows[0]["semantic_status"], "analyzed")
+        self.assertEqual(rows[0]["semantic_intent"], "support.contact")
+        self.assertEqual(rows[0]["semantic_confidence"], 0.94)
+        self.assertEqual(rows[0]["faq_confidence"], 0.50)
+        self.assertEqual(rows[0]["rag_confidence"], 0.20)
 
 
 if __name__ == "__main__":

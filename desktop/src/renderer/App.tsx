@@ -453,6 +453,15 @@ function DecisionSummary({ item }: { item: WorkbenchItem }) {
       <DetailRow label="处理模式" value={item.mode || '无'} />
       <DetailRow label="来源" value={item.answer_source || '无'} />
       <DetailRow label="置信度" value={Number(item.confidence || 0).toFixed(2)} />
+      <DetailRow label="AI 语义状态" value={item.semantic_status || '未启用'} />
+      <DetailRow label="AI 识别意图" value={item.semantic_intent || '无'} />
+      <DetailRow label="AI 标准问题" value={item.semantic_question || '无'} />
+      <DetailRow label="AI 语义置信度" value={Number(item.semantic_confidence || 0).toFixed(2)} />
+      <DetailRow label="FAQ 匹配分" value={Number(item.faq_confidence || 0).toFixed(2)} />
+      <DetailRow label="RAG 词面匹配分" value={Number(item.rag_confidence || 0).toFixed(2)} />
+      {item.rag_query && <DetailRow label="RAG 检索问题" value={item.rag_query} />}
+      {item.semantic_model && <DetailRow label="AI 语义模型" value={item.semantic_model} />}
+      {item.semantic_error && <DetailRow label="AI 语义降级原因" value={item.semantic_error} />}
       <DetailRow label="生成方式" value={item.generation_mode || '无'} />
       <DetailRow label="生成模型" value={item.generation_model || '无'} />
       {item.generation_error && <DetailRow label="生成降级原因" value={item.generation_error} />}

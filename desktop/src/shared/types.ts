@@ -104,6 +104,15 @@ export interface WorkbenchItem {
   generation_mode: string
   generation_model: string
   generation_error: string
+  semantic_status: string
+  semantic_intent: string
+  semantic_question: string
+  semantic_confidence: number
+  semantic_model: string
+  semantic_error: string
+  faq_confidence: number
+  rag_confidence: number
+  rag_query: string
   reason: string
 }
 

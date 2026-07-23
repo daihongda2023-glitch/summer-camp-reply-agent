@@ -7,15 +7,22 @@ from summer_camp_agent.workbench_server import create_server
 class WorkbenchServerTest(unittest.TestCase):
     def test_create_server_loads_default_rag_answer_generator(self):
         generator = object()
+        analyzer = object()
         with patch(
             "summer_camp_agent.workbench_server.load_default_rag_answer_generator",
             return_value=generator,
+        ), patch(
+            "summer_camp_agent.workbench_server.load_default_semantic_analyzer",
+            return_value=analyzer,
         ), patch(
             "summer_camp_agent.workbench_server.WorkbenchApiState",
         ) as state_type:
             server, _ = create_server(port=0)
         try:
-            state_type.assert_called_once_with(rag_answer_generator=generator)
+            state_type.assert_called_once_with(
+                rag_answer_generator=generator,
+                semantic_analyzer=analyzer,
+            )
         finally:
             server.server_close()
 
