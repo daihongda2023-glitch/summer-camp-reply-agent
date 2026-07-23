@@ -7,6 +7,7 @@ from summer_camp_agent.knowledge import KnowledgeBase
 from summer_camp_agent.rag_ai import RagGenerationResult
 from summer_camp_agent.rag_index import IndexedChunk
 from summer_camp_agent.rag_retriever import RagSearchResult, ScoredChunk
+from summer_camp_agent.semantic_router import SemanticAnalysisResult
 
 
 class FakeRagRetriever:
@@ -16,6 +17,30 @@ class FakeRagRetriever:
 
     def retrieve(self, question):
         self.questions.append(question)
+        return self.result
+
+
+class SemanticFakeRagRetriever(FakeRagRetriever):
+    def __init__(self, result):
+        super().__init__(None)
+        self.semantic_result = result
+        self.chunks = [item.chunk for item in result.chunks]
+        self.semantic_calls = []
+
+    def retrieve_semantic(self, question, candidate_ids, semantic_confidence):
+        self.semantic_calls.append((question, candidate_ids, semantic_confidence))
+        return self.semantic_result
+
+
+class FakeSemanticAnalyzer:
+    model = "semantic-model"
+
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def analyze(self, question, catalog):
+        self.calls.append((question, catalog))
         return self.result
 
 
@@ -74,6 +99,23 @@ def strong_official_rag_result():
         trust_level="official",
         source_url="https://www.gitlink.org.cn/example/issues/19",
     )
+
+
+def analyzed(**overrides):
+    values = {
+        "status": "analyzed",
+        "canonical_question": "标准问题",
+        "intent": "unknown",
+        "faq_candidate_ids": [],
+        "rag_candidate_ids": [],
+        "rag_queries": [],
+        "semantic_confidence": 0.94,
+        "requires_human": False,
+        "reason": "语义匹配",
+        "model": "semantic-model",
+    }
+    values.update(overrides)
+    return SemanticAnalysisResult(**values)
 
 
 class AnswerEngineTest(unittest.TestCase):
@@ -313,6 +355,155 @@ class AnswerEngineTest(unittest.TestCase):
         self.assertEqual(result.generation_mode, "rag_community")
         self.assertEqual(result.source, rag_result.source)
         self.assertEqual(generator.calls, [])
+
+    def test_semantic_faq_candidate_answers_low_lexical_similarity_question(self):
+        analyzer = FakeSemanticAnalyzer(
+            analyzed(
+                canonical_question="线下夏令营在哪里举办？",
+                intent="offline.location",
+                faq_candidate_ids=["faq.offline.location"],
+                semantic_confidence=0.96,
+            )
+        )
+        engine = AnswerEngine(
+            KnowledgeBase.from_default(),
+            semantic_analyzer=analyzer,
+            today=date(2026, 7, 23),
+        )
+
+        result = engine.answer("线下营地址是什么？")
+
+        self.assertEqual(result.action, "auto_reply")
+        self.assertEqual(result.intent, "offline.location")
+        self.assertEqual(result.generation_mode, "faq")
+        self.assertEqual(result.semantic_status, "analyzed")
+        self.assertEqual(result.semantic_confidence, 0.96)
+        self.assertLess(result.faq_confidence, 0.55)
+        self.assertEqual(len(analyzer.calls), 1)
+        self.assertIn(
+            "faq.offline.location",
+            [item["id"] for item in analyzer.calls[0][1].faq_items],
+        )
+
+    def test_not_grounded_semantic_rag_becomes_pending_with_cautious_reply(self):
+        rag_result = strong_official_rag_result()
+        rag_result = RagSearchResult(
+            **{
+                **rag_result.__dict__,
+                "confidence": 0.94,
+                "retrieval_mode": "semantic",
+                "lexical_confidence": 0.326,
+                "semantic_confidence": 0.94,
+            }
+        )
+        retriever = SemanticFakeRagRetriever(rag_result)
+        analyzer = FakeSemanticAnalyzer(
+            analyzed(
+                canonical_question="XPUOJ 的 MoE 分数为什么下降？",
+                intent="evaluation.scoring",
+                rag_candidate_ids=["chunk-1"],
+                semantic_confidence=0.94,
+            )
+        )
+        generator = FakeRagAnswerGenerator(
+            RagGenerationResult(
+                "invalid",
+                model="fake-model",
+                error="not_grounded",
+            )
+        )
+        engine = AnswerEngine(
+            KnowledgeBase.from_default(),
+            rag_retriever=retriever,
+            rag_answer_generator=generator,
+            semantic_analyzer=analyzer,
+        )
+
+        result = engine.answer("XPUOJ测评 MoE 耗时减少了但是分数反而降低了？")
+
+        self.assertEqual(result.action, "suggested_reply")
+        self.assertEqual(result.generation_mode, "rag_insufficient")
+        self.assertEqual(result.semantic_intent, "evaluation.scoring")
+        self.assertEqual(result.rag_confidence, 0.326)
+        self.assertIn("没有说明", result.reply)
+        self.assertIn("XPUOJ", result.reply)
+        self.assertEqual(
+            retriever.semantic_calls[0][1],
+            ["chunk-1"],
+        )
+
+    def test_semantic_rag_candidate_can_generate_grounded_answer(self):
+        rag_result = strong_official_rag_result()
+        rag_result = RagSearchResult(
+            **{
+                **rag_result.__dict__,
+                "confidence": 0.95,
+                "retrieval_mode": "semantic",
+                "lexical_confidence": 0.20,
+                "semantic_confidence": 0.95,
+            }
+        )
+        analyzer = FakeSemanticAnalyzer(
+            analyzed(
+                canonical_question="赛题问题应该通过什么渠道提问并联系谁？",
+                intent="support.contact",
+                rag_candidate_ids=["chunk-1"],
+                semantic_confidence=0.95,
+            )
+        )
+        generator = FakeRagAnswerGenerator(
+            RagGenerationResult(
+                "generated",
+                answer="建议优先通过 GitLink Issue 提交问题，并加入赛事答疑群。",
+                model="fake-model",
+            )
+        )
+        engine = AnswerEngine(
+            KnowledgeBase.from_default(),
+            rag_retriever=SemanticFakeRagRetriever(rag_result),
+            rag_answer_generator=generator,
+            semantic_analyzer=analyzer,
+        )
+
+        result = engine.answer("夏令营期间我碰到问题该找谁处理？")
+
+        self.assertEqual(result.action, "auto_reply")
+        self.assertEqual(result.generation_mode, "rag_ai")
+        self.assertEqual(result.semantic_intent, "support.contact")
+        self.assertEqual(result.reply, "建议优先通过 GitLink Issue 提交问题，并加入赛事答疑群。")
+
+    def test_human_safety_fallback_runs_before_external_semantic_analyzer(self):
+        analyzer = FakeSemanticAnalyzer(analyzed())
+        engine = AnswerEngine(
+            KnowledgeBase.from_default(),
+            semantic_analyzer=analyzer,
+        )
+
+        result = engine.answer("老师，我被录取了吗？能帮我查下面试结果吗？")
+
+        self.assertEqual(result.action, "human_fallback")
+        self.assertEqual(analyzer.calls, [])
+
+    def test_unavailable_semantic_analyzer_falls_back_to_local_faq(self):
+        analyzer = FakeSemanticAnalyzer(
+            SemanticAnalysisResult(
+                "unavailable",
+                model="semantic-model",
+                error="insufficient_quota",
+            )
+        )
+        engine = AnswerEngine(
+            KnowledgeBase.from_default(),
+            semantic_analyzer=analyzer,
+            today=date(2026, 7, 23),
+        )
+
+        result = engine.answer("线下夏令营在哪？")
+
+        self.assertEqual(result.intent, "offline.location")
+        self.assertEqual(result.generation_mode, "faq")
+        self.assertEqual(result.semantic_status, "unavailable")
+        self.assertEqual(result.semantic_error, "insufficient_quota")
 
     def test_can_use_custom_answer_provider_chain(self):
         result = AnswerEngine(
