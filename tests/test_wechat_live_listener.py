@@ -11,7 +11,7 @@ from summer_camp_agent.weflow_import import WeFlowSession
 
 
 class FakeClient:
-    def __init__(self, sessions=None, messages=None):
+    def __init__(self, sessions=None, messages=None, members=None):
         self.search_calls = []
         self.pull_calls = []
         self.sessions = (
@@ -37,6 +37,7 @@ class FakeClient:
             if messages is None
             else messages
         )
+        self.members = [] if members is None else members
 
     def search_sessions(self, keyword):
         self.search_calls.append(keyword)
@@ -46,6 +47,7 @@ class FakeClient:
         self.pull_calls.append((session_id, since, end, limit, offset))
         return {
             "meta": {"groupId": "room@chatroom"},
+            "members": self.members,
             "messages": self.messages,
             "sync": {"hasMore": False},
         }
@@ -65,6 +67,120 @@ class MemoryStateStore(ListenerStateStore):
 
 
 class WeFlowLiveListenerTest(unittest.TestCase):
+    def test_poll_once_ignores_all_messages_from_current_logged_in_account(self):
+        now = datetime(2026, 7, 22, 23, 0, 0)
+        sent_reply = "TileLang 资料已开放；测试集正在整理中。"
+        test_question = "报名时间是什么时候？"
+        store = MemoryStateStore()
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="测试工具", keywords=["测试"]),
+            state_store=store,
+            client=FakeClient(
+                sessions=[WeFlowSession(id="room@chatroom", name="测试工具", type="group")],
+                messages=[
+                    {
+                        "sender": "wxid_self",
+                        "accountName": "我",
+                        "timestamp": int((now - timedelta(seconds=10)).timestamp()),
+                        "type": 0,
+                        "content": sent_reply,
+                        "platformMessageId": "msg-self-reply",
+                    },
+                    {
+                        "sender": "wxid_self",
+                        "accountName": "我",
+                        "timestamp": int((now - timedelta(seconds=5)).timestamp()),
+                        "type": 0,
+                        "content": test_question,
+                        "platformMessageId": "msg-self-question",
+                    },
+                ],
+            ),
+            token="fake-token",
+            clock=lambda: now,
+        )
+        listener.mark_replied("evt-original-question", sent_reply)
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.events, [])
+
+    def test_poll_once_ignores_current_account_from_member_identity_when_message_has_no_account_name(self):
+        now = datetime(2026, 7, 22, 23, 0, 0)
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="测试工具", keywords=[]),
+            state_store=MemoryStateStore(),
+            client=FakeClient(
+                sessions=[WeFlowSession(id="room@chatroom", name="测试工具", type="group")],
+                members=[{"platformId": "wxid_self", "accountName": "我"}],
+                messages=[
+                    {
+                        "sender": "wxid_self",
+                        "timestamp": int((now - timedelta(seconds=5)).timestamp()),
+                        "type": 0,
+                        "content": "这个怎么处理？",
+                        "platformMessageId": "msg-self-without-account-name",
+                    }
+                ],
+            ),
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.events, [])
+
+    def test_poll_once_never_replays_replied_event_even_when_seen_messages_are_included(self):
+        store = MemoryStateStore()
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            state_store=store,
+            client=FakeClient(),
+            token="fake-token",
+            clock=lambda: datetime.fromtimestamp(1781911320) + timedelta(minutes=1),
+        )
+        first = listener.poll_once()
+        replied_event_id = first.events[0].event_id
+        from summer_camp_agent.wechat_bridge_config import ListenerState
+
+        store.state = ListenerState.from_dict(
+            {
+                **store.state.to_dict(),
+                "replied_event_ids": [replied_event_id],
+            }
+        )
+
+        second = listener.poll_once(include_seen=True)
+
+        self.assertEqual(second.events, [])
+
+    def test_poll_once_keeps_question_trigger_even_without_configured_keyword(self):
+        now = datetime(2026, 7, 21, 12, 0, 0)
+        fake_client = FakeClient(
+            messages=[
+                {
+                    "sender": "wxid_student",
+                    "timestamp": int((now - timedelta(minutes=1)).timestamp()),
+                    "type": 0,
+                    "content": "请问能否公开下载比赛镜像？",
+                    "platformMessageId": "msg-image-download",
+                }
+            ]
+        )
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(group_name="测试群", keywords=["测试"]),
+            state_store=MemoryStateStore(),
+            client=fake_client,
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual([event.content for event in result.events], ["请问能否公开下载比赛镜像？"])
+
     def test_poll_once_returns_new_chat_events_and_persists_seen_ids(self):
         store = MemoryStateStore()
         listener = WeFlowLiveListener(

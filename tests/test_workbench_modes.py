@@ -42,7 +42,7 @@ class WorkbenchModesTest(unittest.TestCase):
         self.assertEqual(decision.mode, "auto_send")
         self.assertFalse(decision.requires_review)
 
-    def test_auto_mode_downgrades_non_whitelisted_reply_to_draft(self):
+    def test_auto_mode_sends_faq_reply_without_intent_whitelist(self):
         config = GroupConfig(group_name="咨询群", mode="auto", auto_reply_intents=["registration.link"])
         card = ReviewCard(
             original_question="住宿怎么安排？",
@@ -57,25 +57,43 @@ class WorkbenchModesTest(unittest.TestCase):
 
         decision = ReplyModeController(config).decide(TriggerDecision(True, ["keyword"], ["住宿"]), card)
 
-        self.assertEqual(decision.mode, "draft")
-        self.assertTrue(decision.requires_review)
+        self.assertEqual(decision.mode, "auto_send")
+        self.assertFalse(decision.requires_review)
 
-    def test_auto_mode_downgrades_low_confidence_reply_to_draft(self):
-        config = GroupConfig(group_name="咨询群", mode="auto", auto_reply_intents=["registration.link"])
+    def test_auto_mode_sends_strong_official_rag_reply(self):
+        config = GroupConfig(group_name="咨询群", mode="auto")
         card = ReviewCard(
-            original_question="报名入口在哪里？",
+            original_question="请问能否公开下载比赛镜像？",
             recommendation="send",
             available_actions=[],
             action="auto_reply",
-            reply="报名入口为...",
-            intent="registration.link",
-            source="FAQ",
-            confidence=0.60,
+            reply="可以通过沐曦开发者社区下载。",
+            intent="rag.document",
+            source="GitLink Issue #19",
+            confidence=0.84,
         )
 
-        decision = ReplyModeController(config).decide(TriggerDecision(True, ["keyword"], ["报名"]), card)
+        decision = ReplyModeController(config).decide(TriggerDecision(True, ["question_mark"], []), card)
 
-        self.assertEqual(decision.mode, "draft")
+        self.assertEqual(decision.mode, "auto_send")
+        self.assertFalse(decision.requires_review)
+
+    def test_auto_mode_never_sends_community_rag_suggestion(self):
+        config = GroupConfig(group_name="咨询群", mode="auto")
+        card = ReviewCard(
+            original_question="cmake 构建失败怎么办？",
+            recommendation="mark_pending",
+            available_actions=[],
+            action="suggested_reply",
+            reply="以下是社区经验，仅供参考。",
+            intent="rag.document",
+            source="GitLink 社区 Issue",
+            confidence=0.95,
+        )
+
+        decision = ReplyModeController(config).decide(TriggerDecision(True, ["keyword"], ["构建"]), card)
+
+        self.assertEqual(decision.mode, "mark_pending")
         self.assertTrue(decision.requires_review)
 
     def test_human_fallback_is_escalated(self):

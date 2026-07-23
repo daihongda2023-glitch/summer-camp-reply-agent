@@ -7,6 +7,7 @@ from pathlib import Path
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
 from .knowledge import KnowledgeBase
+from .rag_runtime import load_default_rag_retriever
 from .review import OperatorReview, ReviewCard
 from .workbench_models import (
     ChatEvent,
@@ -43,10 +44,17 @@ class WorkbenchSession:
         log_path: str | Path = DEFAULT_LOG_PATH,
         trace_path: str | Path | None = None,
         review: OperatorReview | None = None,
+        rag_answer_generator=None,
     ):
         self.group_config = group_config
         self.trigger_engine = TriggerEngine(group_config)
-        self.review = review or OperatorReview(AnswerEngine(KnowledgeBase.from_default()))
+        self.review = review or OperatorReview(
+            AnswerEngine(
+                KnowledgeBase.from_default(),
+                rag_retriever=load_default_rag_retriever(),
+                rag_answer_generator=rag_answer_generator,
+            )
+        )
         self.reply_modes = ReplyModeController(group_config)
         self.candidate_store = ReplyCandidateStore(candidate_path)
         self.log_store = ReplyLogStore(log_path)
@@ -97,6 +105,9 @@ class WorkbenchSession:
                 "source": card.source,
                 "confidence": card.confidence,
                 "requires_review": decision.requires_review,
+                "generation_mode": card.generation_mode,
+                "generation_model": card.generation_model,
+                "generation_error": card.generation_error,
             },
         )
         return WorkbenchItem(event=event, trigger=trigger, review_card=card, reply_decision=decision)
@@ -136,6 +147,9 @@ class WorkbenchSession:
                 confidence=item.review_card.confidence,
                 operator_action=operator_action,
                 created_at=now,
+                generation_mode=item.review_card.generation_mode,
+                generation_model=item.review_card.generation_model,
+                generation_error=item.review_card.generation_error,
             )
         )
 
@@ -200,6 +214,9 @@ class WorkbenchSession:
                 confidence=item.review_card.confidence,
                 operator_action=operator_action,
                 created_at=now,
+                generation_mode=item.review_card.generation_mode,
+                generation_model=item.review_card.generation_model,
+                generation_error=item.review_card.generation_error,
             )
         )
 

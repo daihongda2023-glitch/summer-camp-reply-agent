@@ -22,6 +22,9 @@ class ReviewCard:
     source: str = ""
     reason: str = ""
     confidence: float = 0.0
+    generation_mode: str = ""
+    generation_model: str = ""
+    generation_error: str = ""
 
 
 class OperatorReview:
@@ -40,6 +43,9 @@ class OperatorReview:
             source=result.source,
             reason=result.reason,
             confidence=result.confidence,
+            generation_mode=result.generation_mode,
+            generation_model=result.generation_model,
+            generation_error=result.generation_error,
         )
 
     @staticmethod

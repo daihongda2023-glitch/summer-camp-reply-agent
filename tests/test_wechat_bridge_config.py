@@ -14,6 +14,36 @@ from summer_camp_agent.wechat_bridge_config import (
 
 
 class WeChatBridgeConfigTest(unittest.TestCase):
+    def test_legacy_seen_events_are_migrated_to_replied_events(self):
+        from summer_camp_agent.wechat_bridge_config import ListenerState
+
+        state = ListenerState.from_dict({"seen_event_ids": ["evt-already-handled"]})
+
+        self.assertEqual(state.replied_event_ids, ["evt-already-handled"])
+
+    def test_listener_state_round_trips_replied_event_ids(self):
+        from summer_camp_agent.wechat_bridge_config import ListenerState
+
+        state = ListenerState.from_dict(
+            {
+                "seen_event_ids": ["evt-1", "evt-2"],
+                "replied_event_ids": ["evt-1"],
+            }
+        )
+
+        self.assertEqual(state.to_dict()["replied_event_ids"], ["evt-1"])
+
+    def test_listener_state_hashes_sent_reply_content_for_feedback_loop_prevention(self):
+        reply = "TileLang 资料已开放；测试集正在整理中。"
+
+        state = ListenerState.empty().with_sent_reply(reply)
+        restored = ListenerState.from_dict(state.to_dict())
+        raw_text = json.dumps(state.to_dict(), ensure_ascii=False)
+
+        self.assertEqual(len(restored.sent_reply_hashes), 1)
+        self.assertTrue(restored.sent_reply_hashes[0].startswith("sha256:"))
+        self.assertNotIn(reply, raw_text)
+
     def test_default_config_uses_target_weflow_group(self):
         self.assertEqual(WeChatBridgeConfig().group_name, DEFAULT_GROUP_NAME)
         self.assertEqual(WeChatBridgeConfig.from_dict({}).group_name, DEFAULT_GROUP_NAME)

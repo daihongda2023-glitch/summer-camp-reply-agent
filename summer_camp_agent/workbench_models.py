@@ -64,6 +64,9 @@ class ReplyLogEntry:
     confidence: float
     operator_action: str
     created_at: str
+    generation_mode: str = ""
+    generation_model: str = ""
+    generation_error: str = ""
 
 
 @dataclass(frozen=True)

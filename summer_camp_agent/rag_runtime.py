@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
+from .rag_ai import OpenAIRagAnswerGenerator, RagAnswerGenerator
+from .rag_documents import load_document_chunks
 from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
 from .rag_index import CHUNKS_FILE, MANIFEST_FILE, RagIndexError, load_rag_index
-from .rag_retriever import RagRetriever
+from .rag_retriever import LocalDocumentRagRetriever, RagRetriever
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAG_INDEX_PATH = PROJECT_ROOT / "data" / "rag" / "index"
+DEFAULT_RAG_DOCUMENTS_PATH = PROJECT_ROOT / "data" / "rag" / "documents"
 
 
 def create_embedding_provider(
@@ -38,3 +42,15 @@ def load_optional_rag_retriever(
     except (RagEmbeddingError, RagIndexError):
         return None
     return RagRetriever(rag_index, provider, top_k=top_k)
+
+
+def load_default_rag_answer_generator() -> RagAnswerGenerator | None:
+    return OpenAIRagAnswerGenerator.from_env()
+
+
+@lru_cache(maxsize=1)
+def load_default_rag_retriever() -> LocalDocumentRagRetriever | None:
+    chunks = load_document_chunks(DEFAULT_RAG_DOCUMENTS_PATH)
+    if not chunks:
+        return None
+    return LocalDocumentRagRetriever(chunks)

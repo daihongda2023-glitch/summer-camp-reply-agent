@@ -3,7 +3,25 @@ from __future__ import annotations
 from .workbench_models import ChatEvent, GroupConfig, TriggerDecision
 
 
-DEFAULT_CAMP_TERMS = ["夏令营", "报名", "住宿", "交通", "作业", "面试", "入营", "线下", "课程", "通知", "GPU", "算子"]
+DEFAULT_CAMP_TERMS = [
+    "夏令营",
+    "报名",
+    "住宿",
+    "交通",
+    "作业",
+    "面试",
+    "入营",
+    "线下",
+    "课程",
+    "通知",
+    "比赛",
+    "赛题",
+    "镜像",
+    "评测",
+    "算力",
+    "GPU",
+    "算子",
+]
 QUESTION_MARKS = ["?", "？"]
 TEXT_RAW_TYPES = {"text", "0", 0}
 
@@ -24,7 +42,7 @@ class TriggerEngine:
             reasons.append("mention")
         if matched_keywords:
             reasons.append("keyword")
-        if any(mark in text for mark in QUESTION_MARKS) and any(term in text for term in self.camp_terms):
+        if any(mark in text for mark in QUESTION_MARKS):
             reasons.append("question_mark")
 
         return TriggerDecision(bool(reasons), reasons, matched_keywords)

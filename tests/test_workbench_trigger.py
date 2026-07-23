@@ -42,6 +42,25 @@ class WorkbenchTriggerTest(unittest.TestCase):
         self.assertTrue(decision.should_process)
         self.assertIn("question_mark", decision.reasons)
 
+    def test_triggers_on_any_question_mark_without_camp_term_or_keyword(self):
+        config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
+
+        for content in ("这个怎么处理？", "这个怎么处理?"):
+            with self.subTest(content=content):
+                decision = TriggerEngine(config).decide(self.make_event(content))
+                self.assertTrue(decision.should_process)
+                self.assertIn("question_mark", decision.reasons)
+                self.assertEqual(decision.matched_keywords, [])
+
+    def test_triggers_on_competition_image_question_without_keyword(self):
+        config = GroupConfig(group_name="夏令营咨询群", keywords=["测试"])
+
+        decision = TriggerEngine(config).decide(self.make_event("请问能否公开下载比赛镜像？"))
+
+        self.assertTrue(decision.should_process)
+        self.assertIn("question_mark", decision.reasons)
+        self.assertEqual(decision.matched_keywords, [])
+
     def test_ignores_unrelated_chat(self):
         config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
 

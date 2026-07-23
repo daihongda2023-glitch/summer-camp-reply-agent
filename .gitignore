@@ -15,8 +15,10 @@ data/pending_questions.jsonl
 data/chat_groups.json
 data/reply_candidates.jsonl
 data/reply_logs.jsonl
+data/work_trace.jsonl
 data/listener_state.json
 data/wechat_bridge_config.json
+data/desktop_settings.json
 data/agent_launcher.log
 data/workbench_*.out
 data/workbench_*.err

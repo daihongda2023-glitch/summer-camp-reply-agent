@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from threading import RLock
 from typing import Any, Callable
 
-from .chat_log_sanitizer import AliasRegistry, build_sanitized_message
+from .chat_log_sanitizer import AliasRegistry, build_sanitized_message, hash_identifier
 from .wechat_bridge_config import ListenerStateStore, WeChatBridgeConfig
 from .weflow_import import (
     WeFlowAuthError,
@@ -15,7 +16,8 @@ from .weflow_import import (
     WeFlowSessionSelectionRequired,
     resolve_weflow_token,
 )
-from .workbench_models import ChatEvent
+from .workbench_models import ChatEvent, GroupConfig
+from .workbench_trigger import TriggerEngine
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,7 @@ SENDER_NAME_FIELDS = (
     "name",
     "remark",
 )
-MEMBER_ID_FIELDS = ("id", "username", "userName", "wxid", "sender", "senderUsername")
+MEMBER_ID_FIELDS = ("platformId", "id", "username", "userName", "wxid", "sender", "senderUsername")
 MEMBER_NAME_FIELDS = ("name", "displayName", "nickname", "remark", "alias")
 QUOTE_FIELDS = (
     "quoteMessageId",
@@ -74,8 +76,13 @@ class WeFlowLiveListener:
         self.clock = clock or datetime.now
         self.alias_registry = AliasRegistry()
         self._session: WeFlowSession | None = None
+        self._state_lock = RLock()
 
     def poll_once(self, *, include_seen: bool = False) -> ListenerPollResult:
+        with self._state_lock:
+            return self._poll_once(include_seen=include_seen)
+
+    def _poll_once(self, *, include_seen: bool = False) -> ListenerPollResult:
         try:
             token_value = resolve_weflow_token(self.config.token_env, explicit_token=self.token)
         except WeFlowAuthError as exc:
@@ -88,15 +95,23 @@ class WeFlowLiveListener:
             payload = client.pull_messages(session.id, since=since, end=None, limit=100, offset=0)
             raw_messages = [raw for raw in payload.get("messages", []) if isinstance(raw, dict)]
             member_aliases = _member_aliases(payload)
+            self_sender_ids = _self_sender_ids(payload)
             replied_message_ids = _find_replied_message_ids(raw_messages, member_aliases)
+            sent_reply_hashes = set(state.sent_reply_hashes)
             events: list[ChatEvent] = []
             for raw in raw_messages:
                 if int(raw.get("timestamp") or 0) < since:
                     continue
                 if _raw_message_id(raw) in replied_message_ids:
                     continue
+                if _is_self_message(raw, self_sender_ids):
+                    continue
+                if _is_known_self_sent_reply(raw, sent_reply_hashes):
+                    continue
                 event = self._event_from_raw(raw, session)
                 if event is None:
+                    continue
+                if event.event_id in state.replied_event_ids:
                     continue
                 if event.event_id in state.seen_event_ids and not include_seen:
                     continue
@@ -110,6 +125,21 @@ class WeFlowLiveListener:
             return ListenerPollResult("error", str(exc), [])
         except WeFlowImportError as exc:
             return ListenerPollResult("error", str(exc), [])
+
+    def mark_replied(self, event_id: str, reply: str = "") -> None:
+        value = event_id.strip()
+        if not value:
+            return
+        with self._state_lock:
+            state = self.state_store.load().with_replied_event(value)
+            self.state_store.save(state.with_sent_reply(reply))
+
+    def is_replied(self, event_id: str) -> bool:
+        value = event_id.strip()
+        if not value:
+            return False
+        with self._state_lock:
+            return value in self.state_store.load().replied_event_ids
 
     def _resolve_session(self, client: Any) -> WeFlowSession:
         if self._session is not None:
@@ -137,7 +167,9 @@ class WeFlowLiveListener:
             message_time=message_time,
             sender_id=str(raw.get("sender") or "unknown"),
             content=str(raw.get("content") or ""),
-            keywords=self.config.keywords,
+            # 实时监听必须先保留消息，再由统一触发引擎判断；否则“@智能体”
+            # 和“问号 + 夏令营词”会被关键字预过滤提前丢弃。
+            keywords=[],
             platform_message_id=str(raw.get("platformMessageId") or raw.get("id") or timestamp),
             raw_type=raw.get("type", "text"),
             alias_registry=self.alias_registry,
@@ -145,7 +177,7 @@ class WeFlowLiveListener:
         )
         if message is None:
             return None
-        return ChatEvent(
+        event = ChatEvent(
             event_id=message.platform_message_id_hash,
             group_id_hash=message.group_id_hash,
             group_name=message.group_name,
@@ -156,6 +188,60 @@ class WeFlowLiveListener:
             raw_type=str(message.raw_type),
             source=message.source,
         )
+        trigger = TriggerEngine(
+            GroupConfig(group_name=session.name, keywords=[*self.config.keywords])
+        ).decide(event)
+        return event if trigger.should_process else None
+
+
+def _is_known_self_sent_reply(raw: dict[str, Any], sent_reply_hashes: set[str]) -> bool:
+    if not sent_reply_hashes or not _is_self_message(raw):
+        return False
+    content = str(raw.get("content") or "").strip()
+    return bool(content) and hash_identifier(content) in sent_reply_hashes
+
+
+def _is_self_message(raw: dict[str, Any], self_sender_ids: set[str] | None = None) -> bool:
+    for field in ("isSelf", "isSend", "fromMe", "sentBySelf"):
+        value = raw.get(field)
+        if value is True or str(value).strip().lower() in {"1", "true", "yes"}:
+            return True
+    direction = str(raw.get("direction") or "").strip().lower()
+    if direction in {"outbound", "outgoing", "sent"}:
+        return True
+    account_name = str(raw.get("accountName") or "").strip().lower()
+    if account_name in {"我", "me", "self"}:
+        return True
+    known_ids = self_sender_ids or set()
+    return any(str(raw.get(field) or "").strip() in known_ids for field in SENDER_ID_FIELDS)
+
+
+def _self_sender_ids(payload: dict[str, Any]) -> set[str]:
+    raw_members = payload.get("members")
+    if isinstance(raw_members, dict):
+        iterable = [
+            ({**value, "id": key} if isinstance(value, dict) else {"id": key, "name": value})
+            for key, value in raw_members.items()
+        ]
+    elif isinstance(raw_members, list):
+        iterable = [member for member in raw_members if isinstance(member, dict)]
+    else:
+        iterable = []
+
+    self_ids: set[str] = set()
+    for member in iterable:
+        names = {
+            str(member.get(field) or "").strip().lower()
+            for field in ("accountName", *MEMBER_NAME_FIELDS)
+        }
+        if not names.intersection({"我", "me", "self"}):
+            continue
+        for field in MEMBER_ID_FIELDS:
+            value = str(member.get(field) or "").strip()
+            if value:
+                self_ids.add(value)
+                break
+    return self_ids
 
 
 def _find_replied_message_ids(raw_messages: list[dict[str, Any]], member_aliases: dict[str, set[str]]) -> set[str]:

@@ -241,6 +241,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
       }
       const publishReply = getDesktopMethod('publishReply')
       const result = await publishReply(selected.event_id, replyDraft)
+      await refreshItems()
       setMessage(pasteStatusMessage(result))
     })
   }
@@ -253,6 +254,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
       }
       const confirmSent = getDesktopMethod('confirmSent')
       const result = await confirmSent(selected.event_id, replyDraft)
+      await refreshItems()
       setMessage(result.message)
     })
   }
@@ -451,6 +453,9 @@ function DecisionSummary({ item }: { item: WorkbenchItem }) {
       <DetailRow label="处理模式" value={item.mode || '无'} />
       <DetailRow label="来源" value={item.answer_source || '无'} />
       <DetailRow label="置信度" value={Number(item.confidence || 0).toFixed(2)} />
+      <DetailRow label="生成方式" value={item.generation_mode || '无'} />
+      <DetailRow label="生成模型" value={item.generation_model || '无'} />
+      {item.generation_error && <DetailRow label="生成降级原因" value={item.generation_error} />}
       <DetailRow label="原因" value={item.reason || '无'} />
     </dl>
   )

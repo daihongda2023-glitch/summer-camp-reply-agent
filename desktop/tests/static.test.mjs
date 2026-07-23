@@ -239,6 +239,38 @@ test('workbench refreshes message list while observation is running', () => {
   assert.match(app, /window\.setInterval\(refreshItems,\s*Math\.max\(2000,\s*status\.engine\.poll_interval_seconds \* 1000\)\)/)
 })
 
+test('workbench exposes rag ai generation metadata in types and details', () => {
+  const types = read('src/shared/types.ts')
+  const app = read('src/renderer/App.tsx')
+
+  assert.match(types, /generation_mode:\s*string/)
+  assert.match(types, /generation_model:\s*string/)
+  assert.match(types, /generation_error:\s*string/)
+  assert.match(app, /label="生成方式"/)
+  assert.match(app, /label="生成模型"/)
+  assert.match(app, /label="生成降级原因"/)
+})
+
+test('main process keeps polling wechat when the renderer is backgrounded', () => {
+  const main = read('src/main/main.ts')
+
+  assert.match(main, /scheduleItemPoll/)
+  assert.match(main, /pollItemsInBackground/)
+  assert.match(main, /request<AppStatus>\('\/api\/app\/status'\)/)
+  assert.match(main, /request<WorkbenchItemsPayload>\('\/api\/items'\)/)
+  assert.match(main, /poll_interval_seconds \* 1000/)
+  assert.match(main, /clearTimeout/)
+})
+
+test('main process serializes renderer and background item pulls', () => {
+  const main = read('src/main/main.ts')
+
+  assert.match(main, /private itemFetchPromise/)
+  assert.match(main, /async getItems\(\): Promise<WorkbenchItemsPayload> \{[\s\S]*?return this\.fetchItems\(\)/)
+  assert.match(main, /private async fetchItems\(\): Promise<WorkbenchItemsPayload>/)
+  assert.match(main, /await this\.fetchItems\(\)/)
+})
+
 test('workbench button actions surface missing ipc and service errors', () => {
   const app = read('src/renderer/App.tsx')
 
@@ -250,6 +282,15 @@ test('workbench button actions surface missing ipc and service errors', () => {
   assert.match(app, /桌面主进程尚未加载/)
   assert.match(app, /请完全退出并重新启动桌面版/)
   assert.match(app, /errorMessage\(error\)/)
+})
+
+test('workbench refreshes replied status immediately after publish or confirmation', () => {
+  const app = read('src/renderer/App.tsx')
+  const publishBlock = app.slice(app.indexOf('async function publishReply'), app.indexOf('async function confirmSent'))
+  const confirmBlock = app.slice(app.indexOf('async function confirmSent'), app.indexOf('async function saveCandidate'))
+
+  assert.match(publishBlock, /await refreshItems\(\)/)
+  assert.match(confirmBlock, /await refreshItems\(\)/)
 })
 
 test('paste result exposes precise compose statuses and safe fill messages', () => {

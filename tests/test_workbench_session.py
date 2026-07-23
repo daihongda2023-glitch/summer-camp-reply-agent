@@ -3,11 +3,103 @@ import unittest
 import json
 from pathlib import Path
 
+from summer_camp_agent.rag_ai import RagGenerationResult
 from summer_camp_agent.workbench_models import ChatEvent, GroupConfig
 from summer_camp_agent.workbench_session import WorkbenchSession
 
 
+class FakeRagAnswerGenerator:
+    model = "fake-model"
+
+    def __init__(self):
+        self.questions = []
+
+    def generate(self, question, rag_result):
+        self.questions.append(question)
+        return RagGenerationResult(
+            "generated",
+            answer="AI 整理后的比赛镜像下载说明。",
+            model=self.model,
+        )
+
+
 class WorkbenchSessionTest(unittest.TestCase):
+    def test_session_passes_injected_generator_to_default_engine(self):
+        generator = FakeRagAnswerGenerator()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(
+                    group_name="夏令营咨询群",
+                    mode="auto",
+                    keywords=["比赛"],
+                ),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                trace_path=root / "trace.jsonl",
+                rag_answer_generator=generator,
+            )
+            event = ChatEvent(
+                "evt-rag-ai",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-07-23 10:00:00",
+                "请问能否公开下载比赛镜像？",
+                "text",
+                "weflow_live",
+            )
+
+            item = session.process_event(event)
+            session.confirm_reply(item, item.review_card.reply)
+            log_row = json.loads(
+                (root / "logs.jsonl").read_text(encoding="utf-8").splitlines()[0]
+            )
+            trace_rows = [
+                json.loads(line)
+                for line in (root / "trace.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+
+        self.assertEqual(item.review_card.reply, "AI 整理后的比赛镜像下载说明。")
+        self.assertEqual(item.review_card.generation_mode, "rag_ai")
+        self.assertEqual(item.review_card.generation_model, "fake-model")
+        self.assertEqual(generator.questions, ["请问能否公开下载比赛镜像？"])
+        self.assertEqual(log_row["generation_mode"], "rag_ai")
+        self.assertEqual(log_row["generation_model"], "fake-model")
+        think_row = next(row for row in trace_rows if row["phase"] == "think")
+        self.assertEqual(think_row["details"]["generation_mode"], "rag_ai")
+
+    def test_default_session_retrieves_official_gitlink_answer_for_image_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(group_name="夏令营咨询群", mode="auto", keywords=["比赛"]),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            event = ChatEvent(
+                "evt-rag-image",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-07-21 10:00:00",
+                "请问能否公开下载比赛镜像？",
+                "text",
+                "weflow_live",
+            )
+
+            item = session.process_event(event)
+
+        self.assertEqual(item.review_card.action, "auto_reply")
+        self.assertEqual(item.review_card.intent, "rag.document")
+        self.assertEqual(item.reply_decision.mode, "auto_send")
+        self.assertIn("https://developer.metax-tech.com/", item.review_card.reply)
+        self.assertIn("gitlink.org.cn/metax-maca/op_optimization/issues/19", item.review_card.source)
+
     def test_process_event_creates_draft_for_triggered_question(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -31,14 +31,16 @@ def build_demo_events() -> list[ChatEvent]:
     ]
 
 
-def format_item_summary(item: WorkbenchItem) -> str:
+def format_item_summary(item: WorkbenchItem, *, replied: bool = False) -> str:
     reasons = "+".join(item.trigger.reasons) if item.trigger.reasons else "无触发"
     message_time = item.event.message_time[-8:] if item.event.message_time else "--:--:--"
     content = truncate_text(item.event.content, 38)
-    return f"[{status_label(item)}] {message_time} {item.event.sender_alias}：{content}（{reasons}）"
+    return f"[{status_label(item, replied=replied)}] {message_time} {item.event.sender_alias}：{content}（{reasons}）"
 
 
-def status_label(item: WorkbenchItem) -> str:
+def status_label(item: WorkbenchItem, *, replied: bool = False) -> str:
+    if replied:
+        return "已回复"
     return {
         "draft": "待审核",
         "auto_send": "可自动",

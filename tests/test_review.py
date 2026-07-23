@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.engine import AnswerEngine
+from summer_camp_agent.engine import AnswerEngine, AnswerResult
 from summer_camp_agent.knowledge import KnowledgeBase
 from summer_camp_agent.review import OperatorReview, save_pending_question
 
@@ -14,6 +14,26 @@ def make_review():
 
 
 class OperatorReviewTest(unittest.TestCase):
+    def test_review_card_preserves_rag_ai_generation_metadata(self):
+        class StaticEngine:
+            def answer(self, question):
+                return AnswerResult(
+                    action="auto_reply",
+                    reply="AI 整理后的回复",
+                    intent="rag.document",
+                    source="官方 RAG",
+                    confidence=0.96,
+                    generation_mode="rag_ai",
+                    generation_model="fake-model",
+                    generation_error="",
+                )
+
+        card = OperatorReview(StaticEngine()).create_card("比赛镜像能下载吗？")
+
+        self.assertEqual(card.generation_mode, "rag_ai")
+        self.assertEqual(card.generation_model, "fake-model")
+        self.assertEqual(card.generation_error, "")
+
     def test_auto_reply_question_recommends_send(self):
         card = make_review().create_card("报名入口在哪里？")
 

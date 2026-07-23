@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 from http.server import ThreadingHTTPServer
 
+from .rag_runtime import load_default_rag_answer_generator
 from .workbench_api import WorkbenchApiState, create_handler
 
 
 def create_server(port: int = 8765) -> tuple[ThreadingHTTPServer, str]:
-    state = WorkbenchApiState()
+    state = WorkbenchApiState(
+        rag_answer_generator=load_default_rag_answer_generator(),
+    )
     server = ThreadingHTTPServer(("127.0.0.1", port), create_handler(state))
     url = f"http://127.0.0.1:{server.server_address[1]}"
     return server, url

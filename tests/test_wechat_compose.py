@@ -11,6 +11,9 @@ class FakeComposeBackend:
         input_candidate=None,
         read_after_paste=None,
         title="测试群 - 微信",
+        requires_focus_wait=False,
+        focus_wait_result=True,
+        requires_prepare=False,
     ):
         self.target_status = target_status
         self.input_candidate = input_candidate if input_candidate is not None else ComposeInput(status="found")
@@ -19,6 +22,11 @@ class FakeComposeBackend:
         self.clipboard_text = ""
         self.focused = False
         self.shortcuts = []
+        self.requires_focus_wait = requires_focus_wait
+        self.focus_wait_result = focus_wait_result
+        self.focus_waited = False
+        self.requires_prepare = requires_prepare
+        self.prepared = False
 
     def set_clipboard_text(self, text):
         self.clipboard_text = text
@@ -29,7 +37,13 @@ class FakeComposeBackend:
         return ComposeTarget(status=self.target_status, hwnd=0, title="")
 
     def find_compose_input(self, target):
+        if self.requires_prepare and not self.prepared:
+            return ComposeInput(status="not_found")
         return self.input_candidate
+
+    def prepare_target_window(self, target):
+        self.prepared = True
+        return True
 
     def focus_compose_input(self, target, compose_input):
         if compose_input.status == "found":
@@ -38,13 +52,56 @@ class FakeComposeBackend:
         return False
 
     def send_ctrl_v(self):
+        if self.requires_focus_wait and not self.focus_waited:
+            raise OSError("paste sent before focus stabilized")
         self.shortcuts.append("CTRL+V")
+
+    def wait_until_target_focused(self, target):
+        self.focus_waited = True
+        return self.focus_wait_result
 
     def read_compose_text(self, compose_input):
         return self.read_after_paste
 
 
 class WeChatComposeControllerTest(unittest.TestCase):
+    def test_prepares_minimized_wechat_window_before_locating_input(self):
+        backend = FakeComposeBackend(
+            input_candidate=ComposeInput(status="found", existing_text=None, can_read=False),
+            requires_prepare=True,
+        )
+
+        result = WeChatComposeController(backend).fill_reply("同学你好", target_group_name="测试群")
+
+        self.assertTrue(backend.prepared)
+        self.assertEqual(result.action, "filled_unverified")
+        self.assertEqual(backend.shortcuts, ["CTRL+V"])
+
+    def test_waits_for_wechat_focus_before_sending_ctrl_v(self):
+        backend = FakeComposeBackend(
+            input_candidate=ComposeInput(status="found", existing_text=None, can_read=False),
+            requires_focus_wait=True,
+        )
+
+        result = WeChatComposeController(backend).fill_reply("同学你好", target_group_name="测试群")
+
+        self.assertEqual(result.action, "filled_unverified")
+        self.assertTrue(backend.focus_waited)
+        self.assertEqual(backend.shortcuts, ["CTRL+V"])
+
+    def test_keeps_clipboard_fallback_when_wechat_focus_never_stabilizes(self):
+        backend = FakeComposeBackend(
+            input_candidate=ComposeInput(status="found", existing_text=None, can_read=False),
+            focus_wait_result=False,
+        )
+
+        result = WeChatComposeController(backend).fill_reply("同学你好", target_group_name="测试群")
+
+        self.assertEqual(result.action, "copied")
+        self.assertEqual(result.fallback_reason, "focus_not_confirmed")
+        self.assertEqual(result.input_status, "focus_pending")
+        self.assertEqual(backend.shortcuts, [])
+
     def test_copies_without_pasting_when_target_group_is_not_found(self):
         backend = FakeComposeBackend(target_status="not_found")
 
@@ -122,6 +179,22 @@ class WeChatComposeControllerTest(unittest.TestCase):
 
 
 class WindowsComposeBackendTargetSelectionTest(unittest.TestCase):
+    def test_minimized_wechat_window_remains_a_candidate_for_restore(self):
+        class FakeUser32:
+            @staticmethod
+            def IsWindowVisible(hwnd):
+                return True
+
+            @staticmethod
+            def IsIconic(hwnd):
+                return True
+
+        backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
+        backend.user32 = FakeUser32()
+        backend.window_rect = lambda hwnd: (-32000, -32000, -31763, -31961)
+
+        self.assertTrue(backend.is_usable_window(100, "微信"))
+
     def test_accepts_single_generic_wechat_window_when_group_title_is_not_exposed(self):
         backend = WindowsComposeBackend.__new__(WindowsComposeBackend)
 

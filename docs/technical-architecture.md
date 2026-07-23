@@ -148,3 +148,41 @@ status: open | resolved | added_to_kb | ignored
 - 群机器人 webhook 的消息类型、频率限制、失败重试和安全签名规则。
 - 主动提醒是否需要运营人工确认后发送。
 
+## 微信 FAQ、RAG 与 AI 回复链路
+
+当前微信工作台采用以下固定顺序处理命中触发规则的消息：
+
+1. 必须人工处理的问题优先进入人工队列。
+2. FAQ 命中时直接使用已审核答案，不调用外部 AI。
+3. FAQ 未命中时检索本地 RAG 文档。
+4. 只有高置信且标记为 `official` 的资料才交给 OpenAI 生成自然语言回复。
+5. AI 生成内容必须通过依据性、长度和链接检查，才允许自动发送。
+6. AI 超时、不可用、配额不足或输出校验失败时，自动降级为对应的官方 RAG 原文。
+7. `community` 资料只作为运营参考，未知问题进入待补充队列，两者都不自动发送。
+
+回复日志和工作台详情会记录：
+
+- `generation_mode`：`faq`、`rag_ai`、`rag_fallback`、`rag_community`、`needs_info` 或 `human_fallback`。
+- `generation_model`：实际配置的 AI 模型。
+- `generation_error`：安全化后的降级原因，例如 `timeout`、`insufficient_quota`、`unsupported_url`。
+
+### OpenAI 配置
+
+服务启动时从环境变量读取配置：
+
+```text
+OPENAI_API_KEY=必填
+OPENAI_CHAT_MODEL=gpt-5.6-luna
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+`OPENAI_CHAT_MODEL` 和 `OPENAI_BASE_URL` 可省略，分别使用上面的默认值。API Key 不写入仓库、候选记录或回复日志。
+
+可执行以下命令进行真实 AI、模拟微信收发的闭环验证：
+
+```text
+python -m scripts.verify_rag_ai_reply
+```
+
+该脚本不会操作真实微信窗口。验证成功时，三个官方 RAG 场景都应显示 `generation_mode=rag_ai` 并完成模拟自动发送；如果 OpenAI 不可用，脚本会失败并报告安全化原因，业务运行时仍会按上述规则降级回复。
+

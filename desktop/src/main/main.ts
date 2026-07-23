@@ -33,6 +33,10 @@ class PythonService {
   private baseUrl = ''
   private status: AppStatus['engine']['status'] = 'idle'
   private logs: string[] = []
+  private itemPollTimer: ReturnType<typeof setTimeout> | null = null
+  private itemPollInFlight = false
+  private nextItemPollDelayMs = 5_000
+  private itemFetchPromise: Promise<WorkbenchItemsPayload> | null = null
 
   async ensureStarted(): Promise<void> {
     if (this.process && this.status === 'running') return
@@ -56,14 +60,17 @@ class PythonService {
     this.process.stdout.on('data', (chunk) => this.captureOutput(String(chunk)))
     this.process.stderr.on('data', (chunk) => this.pushLog(String(chunk).trim()))
     this.process.on('exit', () => {
+      this.stopItemPolling()
       this.status = 'idle'
       this.process = null
       this.startPromise = null
     })
     await this.waitUntilReady()
+    this.scheduleItemPoll(0)
   }
 
   stop(): void {
+    this.stopItemPolling()
     this.process?.kill()
     this.process = null
     this.status = 'idle'
@@ -126,7 +133,7 @@ class PythonService {
 
   async getItems(): Promise<WorkbenchItemsPayload> {
     await this.ensureStarted()
-    return this.request<WorkbenchItemsPayload>('/api/items')
+    return this.fetchItems()
   }
 
   async ask(question: string): Promise<WorkbenchItemPayload> {
@@ -189,6 +196,56 @@ class PythonService {
     if (!line) return
     this.logs.push(line)
     this.logs = this.logs.slice(-40)
+  }
+
+  private scheduleItemPoll(delayMs = this.nextItemPollDelayMs): void {
+    this.stopItemPolling()
+    if (!this.process || this.status !== 'running') return
+    this.itemPollTimer = setTimeout(() => {
+      this.itemPollTimer = null
+      void this.pollItemsInBackground()
+    }, Math.max(0, delayMs))
+  }
+
+  private stopItemPolling(): void {
+    if (this.itemPollTimer === null) return
+    clearTimeout(this.itemPollTimer)
+    this.itemPollTimer = null
+  }
+
+  private async pollItemsInBackground(): Promise<void> {
+    if (this.itemPollInFlight || !this.process || this.status !== 'running') {
+      this.scheduleItemPoll()
+      return
+    }
+
+    this.itemPollInFlight = true
+    try {
+      const payload = await this.request<AppStatus>('/api/app/status')
+      this.nextItemPollDelayMs = Math.max(2_000, payload.engine.poll_interval_seconds * 1000)
+      if (payload.engine.listener_running) {
+        await this.fetchItems()
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.pushLog(`后台监听轮询失败：${message}`)
+    } finally {
+      this.itemPollInFlight = false
+      this.scheduleItemPoll()
+    }
+  }
+
+  private async fetchItems(): Promise<WorkbenchItemsPayload> {
+    if (this.itemFetchPromise) return this.itemFetchPromise
+    const request = this.request<WorkbenchItemsPayload>('/api/items')
+    this.itemFetchPromise = request
+    try {
+      return await request
+    } finally {
+      if (this.itemFetchPromise === request) {
+        this.itemFetchPromise = null
+      }
+    }
   }
 
   private async waitUntilReady(): Promise<void> {

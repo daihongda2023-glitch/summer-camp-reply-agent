@@ -5,6 +5,7 @@ import inspect
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Any
 from urllib.parse import urlparse
 
@@ -32,6 +33,7 @@ class WorkbenchApiState:
         group_config: GroupConfig | None = None,
         wechat_config_path: str | Path | None = None,
         desktop_settings_path: str | Path | None = None,
+        rag_answer_generator=None,
     ):
         self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
         self.trace_path = Path(trace_path) if trace_path is not None else self._default_trace_path(candidate_path)
@@ -40,16 +42,37 @@ class WorkbenchApiState:
             candidate_path=candidate_path,
             log_path=log_path,
             trace_path=self.trace_path,
+            rag_answer_generator=rag_answer_generator,
         )
         self.items: list[WorkbenchItem] = []
-        self.wechat_config_store = WeChatBridgeConfigStore(wechat_config_path) if wechat_config_path else WeChatBridgeConfigStore()
+        isolated_data_root = Path(candidate_path).parent if Path(candidate_path) != DEFAULT_CANDIDATE_PATH else None
+        resolved_wechat_config_path = (
+            Path(wechat_config_path)
+            if wechat_config_path is not None
+            else (isolated_data_root / "wechat_bridge_config.json" if isolated_data_root is not None else None)
+        )
+        self.wechat_config_store = (
+            WeChatBridgeConfigStore(resolved_wechat_config_path)
+            if resolved_wechat_config_path is not None
+            else WeChatBridgeConfigStore()
+        )
         self.wechat_config = self.wechat_config_store.load()
         self._sync_group_config_from_wechat()
         self.wechat_listener = None
         self.wechat_listener_running = False
+        self._poll_lock = RLock()
+        self._publish_lock = Lock()
+        self._replied_event_ids: set[str] = set()
         self.paste_adapter = AssistedPasteAdapter()
+        resolved_desktop_settings_path = (
+            Path(desktop_settings_path)
+            if desktop_settings_path is not None
+            else (isolated_data_root / "desktop_settings.json" if isolated_data_root is not None else None)
+        )
         self.desktop_settings_store = (
-            DesktopSettingsStore(desktop_settings_path) if desktop_settings_path else DesktopSettingsStore()
+            DesktopSettingsStore(resolved_desktop_settings_path)
+            if resolved_desktop_settings_path is not None
+            else DesktopSettingsStore()
         )
         self.desktop_settings = self.desktop_settings_store.load()
         self.app_running = False
@@ -182,13 +205,13 @@ class WorkbenchApiState:
         return {
             "status": "ok",
             "message": f"已从 WeFlow 导入 {len(self.items)} 条聊天记录：{fetched.group_name}",
-            "items": [serialize_item(item) for item in self.items],
+            "items": self._serialize_items(),
         }
 
     def list_items(self) -> dict[str, Any]:
         if self.wechat_listener_running and self.wechat_listener is not None:
             self._poll_wechat_listener()
-        return {"items": [serialize_item(item) for item in self.items]}
+        return {"items": self._serialize_items()}
 
     def list_work_trace(self) -> dict[str, Any]:
         rows = load_work_trace(self.trace_path)
@@ -221,7 +244,7 @@ class WorkbenchApiState:
         )
         item = self.session.process_event(event)
         self.items.append(item)
-        return {"item": serialize_item(item), "items": [serialize_item(value) for value in self.items]}
+        return {"item": self._serialize_item(item), "items": self._serialize_items()}
 
     def send_reply(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
@@ -244,7 +267,7 @@ class WorkbenchApiState:
             "status": "ok",
             "message": "配置已保存",
             "config": self.wechat_config.to_dict(),
-            "items": [serialize_item(item) for item in self.items],
+            "items": self._serialize_items(),
         }
 
     def get_wechat_config(self) -> dict[str, Any]:
@@ -264,12 +287,13 @@ class WorkbenchApiState:
         return {"status": "ok", "message": "已停止监听"}
 
     def poll_wechat_once(self) -> dict[str, Any]:
-        if self.wechat_listener is None:
-            return {"status": "error", "message": "请先开始监听", "items": [serialize_item(item) for item in self.items]}
-        result = self._call_wechat_listener(include_seen=True)
-        if result.status == "ok":
-            self._append_listener_events(result.events)
-        return {"status": result.status, "message": result.message, "items": [serialize_item(item) for item in self.items]}
+        with self._poll_lock:
+            if self.wechat_listener is None:
+                return {"status": "error", "message": "请先开始监听", "items": self._serialize_items()}
+            result = self._call_wechat_listener(include_seen=True)
+            if result.status == "ok":
+                self._append_listener_events(result.events)
+            return {"status": result.status, "message": result.message, "items": self._serialize_items()}
 
     def paste_reply(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
@@ -283,14 +307,20 @@ class WorkbenchApiState:
     def publish_reply(self, event_id: str, reply: str) -> dict[str, str]:
         if self.wechat_config.send_mode != SEND_MODE_AUTO_SEND:
             raise ValueError("请先在配置中选择系统自动发送，再使用自动发布。")
-        item = self._find_item(event_id)
-        publish_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
-        if publish_method is None:
-            raise ValueError("当前粘贴适配器不支持自动发布。")
-        result = self._call_paste_method(publish_method, reply)
-        operator_action = self._operator_action_for_publish_result(result)
-        self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
-        return self._paste_result_payload(result)
+        with self._poll_lock:
+            with self._publish_lock:
+                item = self._find_item(event_id)
+                if self._is_event_replied(item.event.event_id):
+                    raise ValueError("该消息已回复，已阻止重复发送。")
+                publish_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
+                if publish_method is None:
+                    raise ValueError("当前粘贴适配器不支持自动发布。")
+                result = self._call_paste_method(publish_method, reply)
+                if getattr(result, "action", "") in {"sent_verified", "sent_unverified"}:
+                    self._mark_event_replied(item.event.event_id, reply)
+                operator_action = self._operator_action_for_publish_result(result)
+                self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
+                return self._paste_result_payload(result)
 
     def _paste_result_payload(self, result: Any) -> dict[str, str]:
         return {
@@ -342,6 +372,7 @@ class WorkbenchApiState:
     def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
         self.session.confirm_operator_sent(item, reply)
+        self._mark_event_replied(item.event.event_id, reply)
         return {"status": "ok", "message": "已记录运营确认发送"}
 
     def get_vision_status(self) -> dict[str, Any]:
@@ -363,7 +394,7 @@ class WorkbenchApiState:
         return {
             "status": "ok",
             "message": "微信视觉观察器已停止",
-            "items": [serialize_item(item) for item in self.items],
+            "items": self._serialize_items(),
             "vision": serialize_vision_state(vision),
         }
 
@@ -382,7 +413,7 @@ class WorkbenchApiState:
             return {
                 "status": capture.status,
                 "message": capture.message,
-                "items": [serialize_item(item) for item in self.items],
+                "items": self._serialize_items(),
                 "vision": serialize_vision_state(vision),
             }
 
@@ -391,13 +422,12 @@ class WorkbenchApiState:
             window_title=capture.window_title,
             group_name=self.group_config.group_name,
         )
-        for event in result.events:
-            self.items.append(self.session.process_event(event))
+        self._append_listener_events(result.events)
         self.recent_logs.append(result.message)
         return {
             "status": result.status,
             "message": result.message,
-            "items": [serialize_item(item) for item in self.items],
+            "items": self._serialize_items(),
             "vision": serialize_vision_state(result.vision),
         }
 
@@ -413,7 +443,7 @@ class WorkbenchApiState:
                 group_name=self.wechat_config.group_name,
                 group_id_hash=self.group_config.group_id_hash,
                 enabled=self.wechat_config.enabled,
-                mode=self.group_config.mode,
+                mode="auto" if self.wechat_config.send_mode == SEND_MODE_AUTO_SEND else "semi_auto",
                 keywords=[*self.wechat_config.keywords],
                 agent_mentions=[*self.group_config.agent_mentions],
                 auto_reply_intents=[*self.group_config.auto_reply_intents],
@@ -433,13 +463,14 @@ class WorkbenchApiState:
         self.items = [self.session.process_event(item.event) for item in self.items]
 
     def _poll_wechat_listener(self) -> None:
-        if self.wechat_listener is None:
-            return
-        result = self._call_wechat_listener(include_seen=True)
-        if result.status == "ok":
-            self._append_listener_events(result.events)
-        else:
-            self.recent_logs.append(result.message)
+        with self._poll_lock:
+            if self.wechat_listener is None:
+                return
+            result = self._call_wechat_listener(include_seen=False)
+            if result.status == "ok":
+                self._append_listener_events(result.events)
+            else:
+                self.recent_logs.append(result.message)
 
     def _call_wechat_listener(self, *, include_seen: bool) -> Any:
         try:
@@ -454,8 +485,45 @@ class WorkbenchApiState:
         for event in events:
             if event.event_id in existing_ids:
                 continue
-            self.items.append(self.session.process_event(event))
+            item = self.session.process_event(event)
+            self.items.append(item)
             existing_ids.add(event.event_id)
+            if item.reply_decision.mode != "auto_send" or not item.reply_decision.reply.strip():
+                continue
+            try:
+                result = self.publish_reply(item.event.event_id, item.reply_decision.reply)
+                self.recent_logs.append(f"自动回复：{event.sender_alias} · {result['message']}")
+            except Exception as exc:  # noqa: BLE001 - 单条发送失败不能中断后续监听
+                self.recent_logs.append(f"自动回复失败：{event.sender_alias} · {exc}")
+
+    def _mark_event_replied(self, event_id: str, reply: str = "") -> None:
+        self._replied_event_ids.add(event_id)
+        mark_replied = getattr(self.wechat_listener, "mark_replied", None)
+        if mark_replied is None:
+            return
+        try:
+            mark_replied(event_id, reply)
+        except Exception as exc:  # noqa: BLE001 - 发送结果仍需返回给界面
+            self.recent_logs.append(f"保存已回复标记失败：{exc}")
+
+    def _is_event_replied(self, event_id: str) -> bool:
+        if event_id in self._replied_event_ids:
+            return True
+        is_replied = getattr(self.wechat_listener, "is_replied", None)
+        if is_replied is None:
+            return False
+        try:
+            return bool(is_replied(event_id))
+        except Exception as exc:  # noqa: BLE001 - 状态不可读时保守阻止重复发送
+            self.recent_logs.append(f"读取已回复标记失败：{exc}")
+            return True
+
+    def _serialize_item(self, item: WorkbenchItem) -> dict[str, Any]:
+        replied = self._is_event_replied(item.event.event_id)
+        return serialize_item(item, replied=replied)
+
+    def _serialize_items(self) -> list[dict[str, Any]]:
+        return [self._serialize_item(item) for item in self.items]
 
     def _default_trace_path(self, candidate_path: str | Path) -> Path:
         candidate = Path(candidate_path)
@@ -464,7 +532,7 @@ class WorkbenchApiState:
         return candidate.parent / "work_trace.jsonl"
 
 
-def serialize_item(item: WorkbenchItem) -> dict[str, Any]:
+def serialize_item(item: WorkbenchItem, *, replied: bool = False) -> dict[str, Any]:
     return {
         "event_id": item.event.event_id,
         "group_name": item.event.group_name,
@@ -472,8 +540,9 @@ def serialize_item(item: WorkbenchItem) -> dict[str, Any]:
         "message_time": item.event.message_time,
         "question": item.event.content,
         "source": item.event.source,
-        "summary": format_item_summary(item),
-        "status": status_label(item),
+        "summary": format_item_summary(item, replied=replied),
+        "status": status_label(item, replied=replied),
+        "replied": replied,
         "mode": item.reply_decision.mode,
         "reply": item.reply_decision.reply,
         "trigger_reasons": item.trigger.reasons,
@@ -483,6 +552,9 @@ def serialize_item(item: WorkbenchItem) -> dict[str, Any]:
         "intent": item.review_card.intent,
         "answer_source": item.review_card.source,
         "confidence": item.review_card.confidence,
+        "generation_mode": item.review_card.generation_mode,
+        "generation_model": item.review_card.generation_model,
+        "generation_error": item.review_card.generation_error,
         "reason": item.reply_decision.reason or item.review_card.reason,
     }
 

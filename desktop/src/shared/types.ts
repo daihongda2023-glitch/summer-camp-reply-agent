@@ -91,6 +91,7 @@ export interface WorkbenchItem {
   source: string
   summary: string
   status: string
+  replied: boolean
   mode: string
   reply: string
   trigger_reasons: string[]
@@ -100,6 +101,9 @@ export interface WorkbenchItem {
   intent: string
   answer_source: string
   confidence: number
+  generation_mode: string
+  generation_model: string
+  generation_error: string
   reason: string
 }
 

@@ -48,6 +48,9 @@ class WorkbenchStoreTest(unittest.TestCase):
                 confidence=0.96,
                 operator_action="sent",
                 created_at="2026-06-21T10:00:00+08:00",
+                generation_mode="rag_ai",
+                generation_model="gpt-test",
+                generation_error="",
             )
 
             store.append(entry)
@@ -56,6 +59,9 @@ class WorkbenchStoreTest(unittest.TestCase):
         self.assertEqual(rows[0]["log_id"], "log-1")
         self.assertEqual(rows[0]["trigger_reasons"], ["keyword"])
         self.assertEqual(rows[0]["operator_action"], "sent")
+        self.assertEqual(rows[0]["generation_mode"], "rag_ai")
+        self.assertEqual(rows[0]["generation_model"], "gpt-test")
+        self.assertEqual(rows[0]["generation_error"], "")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ class AnswerResult:
     source: str = ""
     reason: str = ""
     confidence: float = 0.0
+    generation_mode: str = ""
+    generation_model: str = ""
+    generation_error: str = ""
 
 
 class AnswerEngine:
@@ -23,11 +26,13 @@ class AnswerEngine:
         knowledge_base: KnowledgeBase,
         today: date | None = None,
         rag_retriever=None,
+        rag_answer_generator=None,
         providers: list[AnswerProvider] | None = None,
     ):
         self.knowledge_base = knowledge_base
         self.today = today or date.today()
         self.rag_retriever = rag_retriever
+        self.rag_answer_generator = rag_answer_generator
         self.provider_chain = AnswerProviderChain(providers) if providers is not None else None
 
     def answer(self, text: str) -> AnswerResult:
@@ -47,12 +52,35 @@ class AnswerEngine:
 
         rag_result = self._retrieve_from_rag(text)
         if rag_result is not None:
+            reply = rag_result.reply
+            generation_mode = (
+                "rag_community"
+                if rag_result.trust_level == "community"
+                else "rag_fallback"
+            )
+            generation_model = ""
+            generation_error = ""
+            if (
+                rag_result.trust_level == "official"
+                and rag_result.is_strong
+                and self.rag_answer_generator is not None
+                and rag_result.chunks
+            ):
+                generated = self.rag_answer_generator.generate(text, rag_result)
+                generation_model = generated.model
+                generation_error = generated.error
+                if generated.status == "generated":
+                    reply = generated.answer
+                    generation_mode = "rag_ai"
             return AnswerResult(
                 action="auto_reply" if rag_result.is_strong else "suggested_reply",
                 intent="rag.document",
-                reply=rag_result.reply,
+                reply=reply,
                 source=rag_result.source,
                 confidence=rag_result.confidence,
+                generation_mode=generation_mode,
+                generation_model=generation_model,
+                generation_error=generation_error,
             )
         return self._needs_info()
 
@@ -64,6 +92,7 @@ class AnswerEngine:
             reply=reply,
             source=f"{item.source}（{item.source_date}，最后更新 {item.last_updated}）",
             confidence=confidence,
+            generation_mode="faq",
         )
 
     def _retrieve_from_rag(self, text: str):
@@ -102,18 +131,21 @@ class AnswerEngine:
                 action="human_fallback",
                 reason="personal_status",
                 reply="这个问题涉及个人报名状态、录取结果或面试结果，需要由组委会人工确认，agent 不会在群内自动查询或判断。",
+                generation_mode="human_fallback",
             )
         if "作业" in text and self._contains_any(text, ["答案", "直接帮我", "代写", "代码跑不通", "debug", "改出答案"]):
             return AnswerResult(
                 action="human_fallback",
                 reason="technical_assignment",
                 reply="这个问题涉及技术作业的具体答案、代码 debug 或评分边界，需要转给课程助教或导师处理，agent 只提供规则说明和资料导航。",
+                generation_mode="human_fallback",
             )
         if self._contains_any(text, ["生病", "受伤", "安全", "突发", "冲突", "投诉"]):
             return AnswerResult(
                 action="human_fallback",
                 reason="safety",
                 reply="这个问题可能涉及医疗、安全、突发事件或投诉争议，需要立即转人工处理。",
+                generation_mode="human_fallback",
             )
         return None
 
@@ -123,6 +155,7 @@ class AnswerEngine:
             action="needs_info",
             reply="这个问题当前资料还没有明确说明，建议等待官方咨询群后续通知，或联系组委会确认。建议将这个问题标记为待补充 FAQ，等组委会确认后再更新知识库。",
             reason="unknown",
+            generation_mode="needs_info",
         )
 
     @staticmethod

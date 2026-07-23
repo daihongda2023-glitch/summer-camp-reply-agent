@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from summer_camp_agent.rag_ai import RagGenerationResult
 from summer_camp_agent.workbench_api import WorkbenchApiState, create_handler
 from summer_camp_agent.wechat_bridge_config import DEFAULT_GROUP_NAME
 from summer_camp_agent.weflow_import import WeFlowSession
@@ -225,6 +226,31 @@ class FakeListener:
         return ListenerPollResult("ok", "ok", self.events)
 
 
+class ReplyAwareFakeListener(FakeListener):
+    def __init__(self, events):
+        super().__init__(events)
+        self.replied_event_ids = []
+        self.sent_replies = []
+
+    def mark_replied(self, event_id, reply=""):
+        self.replied_event_ids.append(event_id)
+        self.sent_replies.append(reply)
+
+    def is_replied(self, event_id):
+        return event_id in self.replied_event_ids
+
+
+class IncludeSeenRecordingListener:
+    def __init__(self):
+        self.include_seen_values = []
+
+    def poll_once(self, *, include_seen=False):
+        from summer_camp_agent.wechat_live_listener import ListenerPollResult
+
+        self.include_seen_values.append(include_seen)
+        return ListenerPollResult("ok", "ok", [])
+
+
 class FakeWeFlowImportClient:
     def __init__(self):
         self.search_calls = []
@@ -296,6 +322,17 @@ class FakePasteAdapter:
             target_status="matched",
             input_status="focused",
             verification_status="matched",
+        )
+
+
+class FakeRagAnswerGenerator:
+    model = "fake-model"
+
+    def generate(self, question, rag_result):
+        return RagGenerationResult(
+            "generated",
+            answer="AI 整理后的比赛镜像下载说明。",
+            model=self.model,
         )
 
 
@@ -432,6 +469,309 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["items"][0]["event_id"], "evt-live")
+
+    def test_concurrent_item_refresh_and_listener_start_do_not_overlap_polls(self):
+        import threading
+        import time
+
+        from summer_camp_agent.wechat_live_listener import ListenerPollResult
+
+        class OverlapDetectingListener:
+            def __init__(self):
+                self.active = 0
+                self.max_active = 0
+                self.lock = threading.Lock()
+
+            def poll_once(self, *, include_seen=False):
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                try:
+                    time.sleep(0.05)
+                    return ListenerPollResult("ok", "ok", [])
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(candidate_path=root / "candidates.jsonl", log_path=root / "logs.jsonl")
+            listener = OverlapDetectingListener()
+            state.wechat_listener = listener
+            state.wechat_listener_running = True
+            barrier = threading.Barrier(3)
+            threads = [
+                threading.Thread(target=lambda: (barrier.wait(), state.poll_wechat_once())),
+                threading.Thread(target=lambda: (barrier.wait(), state.list_items())),
+            ]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        self.assertEqual(listener.max_active, 1)
+
+    def test_item_refresh_waits_until_manual_auto_publish_is_persisted(self):
+        import threading
+
+        from summer_camp_agent.wechat_live_listener import ListenerPollResult
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        class BlockingPasteAdapter(FakePasteAdapter):
+            def __init__(self):
+                super().__init__()
+                self.entered = threading.Event()
+                self.release = threading.Event()
+
+            def send_to_wechat_foreground(self, text, target_group_name=""):
+                self.entered.set()
+                self.release.wait(timeout=2)
+                return super().send_to_wechat_foreground(text, target_group_name)
+
+        class PollRecordingListener(ReplyAwareFakeListener):
+            def __init__(self):
+                super().__init__([])
+                self.polled = threading.Event()
+
+            def poll_once(self, *, include_seen=False):
+                self.polled.set()
+                return ListenerPollResult("ok", "ok", [])
+
+        event = ChatEvent(
+            "evt-manual-publish-lock",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-22 23:00:00",
+            "报名时间是什么时候？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "send_mode": "auto_send",
+                }
+            )
+            adapter = BlockingPasteAdapter()
+            listener = PollRecordingListener()
+            state.paste_adapter = adapter
+            state.wechat_listener = listener
+            state.wechat_listener_running = True
+            item = state.session.process_event(event)
+            state.items = [item]
+            publish_thread = threading.Thread(
+                target=lambda: state.publish_reply(event.event_id, item.reply_decision.reply)
+            )
+            refresh_thread = threading.Thread(target=state.list_items)
+            publish_thread.start()
+            self.assertTrue(adapter.entered.wait(timeout=1))
+            refresh_thread.start()
+            self.assertFalse(listener.polled.wait(timeout=0.05))
+            adapter.release.set()
+            publish_thread.join(timeout=2)
+            refresh_thread.join(timeout=2)
+
+        self.assertTrue(listener.polled.is_set())
+        self.assertEqual(listener.replied_event_ids, [event.event_id])
+
+    def test_poll_wechat_once_auto_publishes_faq_in_auto_send_mode(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-live-auto-faq",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-21 10:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.wechat_listener = FakeListener([event])
+
+            payload = state.poll_wechat_once()
+
+            self.assertEqual(payload["items"][0]["mode"], "auto_send")
+            self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+            self.assertIn("auto_sent_to_wechat", (root / "logs.jsonl").read_text(encoding="utf-8"))
+
+    def test_successful_auto_publish_marks_listener_event_as_replied(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-mark-replied",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-21 10:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            listener = ReplyAwareFakeListener([event])
+            state.wechat_listener = listener
+
+            state.poll_wechat_once()
+
+        self.assertEqual(listener.replied_event_ids, ["evt-mark-replied"])
+        self.assertEqual(listener.sent_replies, [state.items[0].reply_decision.reply])
+
+    def test_repeated_publish_for_same_event_is_blocked_after_first_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            listener = ReplyAwareFakeListener([])
+            state.wechat_listener = listener
+            item = state.ask("报名入口在哪里？")["item"]
+
+            state.publish_reply(item["event_id"], item["reply"])
+            with self.assertRaisesRegex(ValueError, "已回复"):
+                state.publish_reply(item["event_id"], item["reply"])
+
+        self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+
+    def test_background_listener_poll_does_not_include_seen_messages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            listener = IncludeSeenRecordingListener()
+            state.wechat_listener = listener
+            state.wechat_listener_running = True
+
+            state.list_items()
+
+        self.assertEqual(listener.include_seen_values, [False])
+
+    def test_poll_wechat_once_auto_publishes_official_rag_answer(self):
+        from summer_camp_agent.workbench_models import ChatEvent
+
+        event = ChatEvent(
+            "evt-live-auto-rag",
+            "sha256:group",
+            "测试群",
+            "成员002",
+            "student",
+            "2026-07-21 10:01:00",
+            "请问能否公开下载比赛镜像？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+                rag_answer_generator=FakeRagAnswerGenerator(),
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["测试"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.wechat_listener = FakeListener([event])
+
+            payload = state.poll_wechat_once()
+
+        self.assertEqual(payload["items"][0]["intent"], "rag.document")
+        self.assertEqual(payload["items"][0]["mode"], "auto_send")
+        self.assertEqual(payload["items"][0]["generation_mode"], "rag_ai")
+        self.assertEqual(payload["items"][0]["generation_model"], "fake-model")
+        self.assertEqual(payload["items"][0]["generation_error"], "")
+        self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+        self.assertEqual(
+            payload["items"][0]["reply"],
+            "AI 整理后的比赛镜像下载说明。",
+        )
 
     def test_poll_wechat_once_uses_updated_wechat_keywords_for_triggering(self):
         from summer_camp_agent.workbench_models import ChatEvent
@@ -619,9 +959,12 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             item = state.ask("报名入口在哪里？")["item"]
 
             result = state.publish_reply(item["event_id"], item["reply"])
+            listed = state.list_items()["items"][0]
 
             self.assertEqual(result["paste_action"], "sent_verified")
             self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+            self.assertTrue(listed["replied"])
+            self.assertEqual(listed["status"], "已回复")
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
             self.assertIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
@@ -756,6 +1099,36 @@ class FakeVisionWindowBackend:
 
 
 class WorkbenchVisionApiTest(unittest.TestCase):
+    def test_vision_capture_auto_publishes_faq_in_auto_send_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.vision_observer = FakeVisionObserver()
+            state.vision_window_backend = FakeVisionWindowBackend()
+
+            payload = state.capture_vision_once()
+
+        self.assertEqual(payload["items"][0]["mode"], "auto_send")
+        self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+
     def test_start_vision_polls_weflow_messages_first(self):
         from summer_camp_agent.workbench_models import ChatEvent
 

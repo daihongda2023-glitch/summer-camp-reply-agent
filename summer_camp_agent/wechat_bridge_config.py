@@ -70,6 +70,8 @@ class ListenerState:
     last_poll_at: str = ""
     last_message_time: str = ""
     seen_event_ids: list[str] = field(default_factory=list)
+    replied_event_ids: list[str] = field(default_factory=list)
+    sent_reply_hashes: list[str] = field(default_factory=list)
     consecutive_errors: int = 0
 
     @classmethod
@@ -78,11 +80,21 @@ class ListenerState:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], max_seen_ids: int = 2000) -> "ListenerState":
+        seen_event_ids = [str(item) for item in raw.get("seen_event_ids", [])][-max_seen_ids:]
+        raw_replied_event_ids = raw.get("replied_event_ids")
+        replied_event_ids = (
+            [*seen_event_ids]
+            if raw_replied_event_ids is None
+            else [str(item) for item in raw_replied_event_ids][-max_seen_ids:]
+        )
+        sent_reply_hashes = [str(item) for item in raw.get("sent_reply_hashes", [])][-max_seen_ids:]
         return cls(
             session_id_hash=str(raw.get("session_id_hash") or ""),
             last_poll_at=str(raw.get("last_poll_at") or ""),
             last_message_time=str(raw.get("last_message_time") or ""),
-            seen_event_ids=[str(item) for item in raw.get("seen_event_ids", [])][-max_seen_ids:],
+            seen_event_ids=seen_event_ids,
+            replied_event_ids=replied_event_ids,
+            sent_reply_hashes=sent_reply_hashes,
             consecutive_errors=int(raw.get("consecutive_errors") or 0),
         )
 
@@ -92,6 +104,8 @@ class ListenerState:
             last_poll_at=self.last_poll_at,
             last_message_time=self.last_message_time,
             seen_event_ids=[*self.seen_event_ids],
+            replied_event_ids=[*self.replied_event_ids],
+            sent_reply_hashes=[*self.sent_reply_hashes],
             consecutive_errors=self.consecutive_errors,
         )
 
@@ -103,7 +117,41 @@ class ListenerState:
             last_poll_at=datetime.now(timezone.utc).isoformat(),
             last_message_time=self.last_message_time,
             seen_event_ids=seen[-max_seen_ids:],
+            replied_event_ids=[*self.replied_event_ids][-max_seen_ids:],
+            sent_reply_hashes=[*self.sent_reply_hashes][-max_seen_ids:],
             consecutive_errors=0,
+        )
+
+    def with_replied_event(self, event_id: str, max_seen_ids: int = 2000) -> "ListenerState":
+        seen = [item for item in self.seen_event_ids if item != event_id]
+        seen.append(event_id)
+        replied = [item for item in self.replied_event_ids if item != event_id]
+        replied.append(event_id)
+        return ListenerState(
+            session_id_hash=self.session_id_hash,
+            last_poll_at=datetime.now(timezone.utc).isoformat(),
+            last_message_time=self.last_message_time,
+            seen_event_ids=seen[-max_seen_ids:],
+            replied_event_ids=replied[-max_seen_ids:],
+            sent_reply_hashes=[*self.sent_reply_hashes][-max_seen_ids:],
+            consecutive_errors=0,
+        )
+
+    def with_sent_reply(self, reply: str, max_seen_ids: int = 2000) -> "ListenerState":
+        value = reply.strip()
+        if not value:
+            return self
+        reply_hash = hash_identifier(value)
+        sent = [item for item in self.sent_reply_hashes if item != reply_hash]
+        sent.append(reply_hash)
+        return ListenerState(
+            session_id_hash=self.session_id_hash,
+            last_poll_at=self.last_poll_at,
+            last_message_time=self.last_message_time,
+            seen_event_ids=[*self.seen_event_ids][-max_seen_ids:],
+            replied_event_ids=[*self.replied_event_ids][-max_seen_ids:],
+            sent_reply_hashes=sent[-max_seen_ids:],
+            consecutive_errors=self.consecutive_errors,
         )
 
     def to_dict(self) -> dict[str, Any]:

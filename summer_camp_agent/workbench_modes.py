@@ -4,13 +4,9 @@ from .review import ReviewCard
 from .workbench_models import GroupConfig, ReplyDecision, TriggerDecision
 
 
-AUTO_REPLY_THRESHOLD = 0.9
-
-
 class ReplyModeController:
-    def __init__(self, config: GroupConfig, auto_reply_threshold: float = AUTO_REPLY_THRESHOLD):
+    def __init__(self, config: GroupConfig):
         self.config = config
-        self.auto_reply_threshold = auto_reply_threshold
 
     def decide(self, trigger: TriggerDecision, card: ReviewCard) -> ReplyDecision:
         if not trigger.should_process:
@@ -51,9 +47,6 @@ class ReplyModeController:
         )
 
     def _can_auto_send(self, card: ReviewCard) -> bool:
-        return (
-            self.config.mode == "auto"
-            and bool(card.source)
-            and card.confidence >= self.auto_reply_threshold
-            and card.intent in set(self.config.auto_reply_intents)
-        )
+        # AnswerEngine 只会把命中的 FAQ 和高置信官方 RAG 标成 auto_reply；
+        # 社区 RAG、未知问题和人工兜底都在上层分支被拦截。
+        return self.config.mode == "auto" and bool(card.source)

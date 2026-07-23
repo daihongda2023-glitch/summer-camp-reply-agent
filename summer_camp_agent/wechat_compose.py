@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 from dataclasses import dataclass
 import sys
+import time
 from typing import Callable
 
 from .wechat_window import enable_process_dpi_awareness, is_wechat_window_title
@@ -60,6 +61,17 @@ class WeChatComposeController:
         if target.status != "matched":
             return self._target_failure(target)
 
+        prepare_target_window = getattr(self.backend, "prepare_target_window", None)
+        if prepare_target_window is not None and not prepare_target_window(target):
+            return ComposeFillResult(
+                "copied",
+                "微信窗口尚未恢复，已复制到剪贴板。请打开目标群后手动粘贴。",
+                foreground_window_title=target.title,
+                target_found=True,
+                fallback_reason="target_window_not_ready",
+                target_status=target.status,
+            )
+
         compose_input = self.backend.find_compose_input(target)
         if compose_input.status != "found":
             return ComposeFillResult(
@@ -93,6 +105,18 @@ class WeChatComposeController:
                 fallback_reason="input_not_found",
                 target_status=target.status,
                 input_status="not_found",
+            )
+
+        wait_until_target_focused = getattr(self.backend, "wait_until_target_focused", None)
+        if wait_until_target_focused is not None and not wait_until_target_focused(target):
+            return ComposeFillResult(
+                "copied",
+                "微信窗口尚未稳定聚焦，回复已复制到剪贴板，请手动粘贴。",
+                foreground_window_title=target.title,
+                target_found=True,
+                fallback_reason="focus_not_confirmed",
+                target_status=target.status,
+                input_status="focus_pending",
             )
 
         try:
@@ -176,6 +200,7 @@ class WindowsComposeBackend:
     WM_GETTEXTLENGTH = 0x000E
     MOUSEEVENTF_LEFTDOWN = 0x0002
     MOUSEEVENTF_LEFTUP = 0x0004
+    SW_RESTORE = 9
 
     def __init__(self, clipboard_backend=None):
         self.clipboard_backend = clipboard_backend
@@ -199,6 +224,10 @@ class WindowsComposeBackend:
         self.user32.GetClassNameW.restype = ctypes.c_int
         self.user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
         self.user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+        self.user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
+        self.user32.IsIconic.restype = ctypes.wintypes.BOOL
+        self.user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+        self.user32.ShowWindow.restype = ctypes.wintypes.BOOL
         self.user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
         self.user32.GetWindowRect.restype = ctypes.wintypes.BOOL
         self.user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
@@ -259,6 +288,21 @@ class WindowsComposeBackend:
             return fallback
         return ComposeInput("not_found")
 
+    def prepare_target_window(self, target: ComposeTarget, timeout_seconds: float = 1.2) -> bool:
+        if sys.platform != "win32" or not target.hwnd:
+            return False
+        if not self.user32.IsIconic(target.hwnd):
+            return True
+        self.user32.ShowWindow(target.hwnd, self.SW_RESTORE)
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not self.user32.IsIconic(target.hwnd):
+                left, top, right, bottom = self.window_rect(target.hwnd)
+                if (right - left) >= 240 and (bottom - top) >= 240:
+                    return True
+            time.sleep(0.03)
+        return False
+
     def focus_compose_input(self, target: ComposeTarget, compose_input: ComposeInput) -> bool:
         if sys.platform != "win32" or not target.hwnd:
             return False
@@ -268,6 +312,19 @@ class WindowsComposeBackend:
         if compose_input.rect:
             self._click_rect_center(compose_input.rect)
         return True
+
+    def wait_until_target_focused(self, target: ComposeTarget, timeout_seconds: float = 0.8) -> bool:
+        if sys.platform != "win32" or not target.hwnd:
+            return False
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if int(self.user32.GetForegroundWindow() or 0) == target.hwnd:
+                # Windows reports the foreground window before the clicked compose
+                # control has necessarily finished accepting keyboard input.
+                time.sleep(0.08)
+                return True
+            time.sleep(0.03)
+        return False
 
     def send_ctrl_v(self) -> None:
         if self.clipboard_backend is not None and hasattr(self.clipboard_backend, "send_ctrl_v"):
@@ -315,6 +372,8 @@ class WindowsComposeBackend:
             return False
         if not self.user32.IsWindowVisible(hwnd):
             return False
+        if self.user32.IsIconic(hwnd):
+            return True
         left, top, right, bottom = self.window_rect(hwnd)
         return (right - left) >= 240 and (bottom - top) >= 240
 
