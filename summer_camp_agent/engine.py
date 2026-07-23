@@ -97,6 +97,7 @@ class AnswerEngine:
                 if rag_result.trust_level == "community"
                 else "rag_fallback"
             )
+            reason = ""
             generation_model = ""
             generation_error = ""
             if (
@@ -115,11 +116,13 @@ class AnswerEngine:
                     reply = self._insufficient_evidence_reply(text, rag_result)
                     generation_mode = "rag_insufficient"
                     action = "suggested_reply"
+                    reason = "not_grounded"
             return AnswerResult(
                 action=action,
                 intent="rag.document",
                 reply=reply,
                 source=rag_result.source,
+                reason=reason,
                 confidence=rag_result.confidence,
                 generation_mode=generation_mode,
                 generation_model=generation_model,

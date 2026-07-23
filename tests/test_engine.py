@@ -423,6 +423,7 @@ class AnswerEngineTest(unittest.TestCase):
 
         self.assertEqual(result.action, "suggested_reply")
         self.assertEqual(result.generation_mode, "rag_insufficient")
+        self.assertEqual(result.reason, "not_grounded")
         self.assertEqual(result.semantic_intent, "evaluation.scoring")
         self.assertEqual(result.rag_confidence, 0.326)
         self.assertIn("没有说明", result.reply)
