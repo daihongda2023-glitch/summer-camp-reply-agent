@@ -109,6 +109,81 @@ class RagRetrieverTest(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_local_retriever_accepts_one_valid_official_semantic_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = Path(directory) / "documents"
+            documents.mkdir()
+            (documents / "contact.md").write_text(
+                "---\n"
+                "source_type: gitlink_issue\n"
+                "trust_level: official\n"
+                "source_url: https://www.gitlink.org.cn/example/repo/issues/18\n"
+                "---\n"
+                "# 两个赛题联系人不一致时应该联系谁？\n\n"
+                "建议优先通过 GitLink Issue 提交问题，并加入赛事答疑群。\n",
+                encoding="utf-8",
+            )
+            retriever = LocalDocumentRagRetriever(load_document_chunks(documents))
+            chunk_id = retriever.chunks[0].chunk_id
+
+            result = retriever.retrieve_semantic(
+                "夏令营期间我碰到问题该找谁处理？",
+                [chunk_id],
+                semantic_confidence=0.93,
+            )
+
+        assert result is not None
+        self.assertEqual(result.chunks[0].chunk.chunk_id, chunk_id)
+        self.assertEqual(result.retrieval_mode, "semantic")
+        self.assertEqual(result.semantic_confidence, 0.93)
+        self.assertLess(result.lexical_confidence, 0.72)
+        self.assertTrue(result.is_strong)
+
+    def test_semantic_candidate_rejects_ambiguous_unknown_or_low_confidence_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = Path(directory) / "documents"
+            documents.mkdir()
+            (documents / "one.md").write_text("# 资料一\n\n第一条资料。", encoding="utf-8")
+            (documents / "two.md").write_text("# 资料二\n\n第二条资料。", encoding="utf-8")
+            retriever = LocalDocumentRagRetriever(load_document_chunks(documents))
+            first_id, second_id = [chunk.chunk_id for chunk in retriever.chunks]
+
+            self.assertIsNone(
+                retriever.retrieve_semantic("问题", [first_id, second_id], 0.95)
+            )
+            self.assertIsNone(
+                retriever.retrieve_semantic("问题", ["missing"], 0.95)
+            )
+            self.assertIsNone(
+                retriever.retrieve_semantic("问题", [first_id], 0.84)
+            )
+
+    def test_community_semantic_candidate_is_never_strong(self):
+        with tempfile.TemporaryDirectory() as directory:
+            documents = Path(directory) / "documents"
+            documents.mkdir()
+            (documents / "community.md").write_text(
+                "---\n"
+                "source_type: gitlink_issue\n"
+                "trust_level: community\n"
+                "source_url: https://www.gitlink.org.cn/example/repo/issues/15\n"
+                "---\n"
+                "# 构建失败经验\n\n可以尝试重新安装 cmake。\n",
+                encoding="utf-8",
+            )
+            retriever = LocalDocumentRagRetriever(load_document_chunks(documents))
+            chunk_id = retriever.chunks[0].chunk_id
+
+            result = retriever.retrieve_semantic(
+                "我的构建失败了",
+                [chunk_id],
+                semantic_confidence=0.98,
+            )
+
+        assert result is not None
+        self.assertEqual(result.trust_level, "community")
+        self.assertFalse(result.is_strong)
+
     def _build_retriever_for_document(self, root: Path, trust_level: str) -> RagRetriever:
         documents = root / "documents"
         index = root / "index"

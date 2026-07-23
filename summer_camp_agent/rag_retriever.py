@@ -12,6 +12,7 @@ from .rag_index import IndexedChunk, RagIndex, cosine_similarity
 DEFAULT_TOP_K = 4
 DEFAULT_MIN_SIMILARITY = 0.72
 DEFAULT_STRONG_SIMILARITY = 0.82
+DEFAULT_SEMANTIC_STRONG_CONFIDENCE = 0.85
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,10 @@ class RagSearchResult:
     is_strong: bool
     trust_level: str = "official"
     source_url: str = ""
+    retrieval_mode: str = "local"
+    lexical_confidence: float = 0.0
+    semantic_confidence: float = 0.0
+    retrieval_query: str = ""
 
 
 class RagRetriever:
@@ -72,6 +77,8 @@ class RagRetriever:
             is_strong=trust_level == "official" and best.score >= self.strong_similarity,
             trust_level=trust_level,
             source_url=source_url,
+            lexical_confidence=best.score,
+            retrieval_query=question.strip(),
         )
 
 
@@ -115,6 +122,48 @@ class LocalDocumentRagRetriever:
             is_strong=trust_level == "official" and best.score >= self.strong_similarity,
             trust_level=trust_level,
             source_url=source_url,
+            lexical_confidence=best.score,
+            retrieval_query=normalized,
+        )
+
+    def retrieve_semantic(
+        self,
+        question: str,
+        candidate_ids: list[str],
+        semantic_confidence: float,
+    ) -> RagSearchResult | None:
+        unique_ids = {
+            candidate_id.strip()
+            for candidate_id in candidate_ids
+            if candidate_id.strip()
+        }
+        if (
+            len(unique_ids) != 1
+            or semantic_confidence < DEFAULT_SEMANTIC_STRONG_CONFIDENCE
+            or semantic_confidence > 1
+        ):
+            return None
+        candidate_id = next(iter(unique_ids))
+        matches = [chunk for chunk in self.chunks if chunk.chunk_id == candidate_id]
+        if len(matches) != 1:
+            return None
+
+        chunk = matches[0]
+        trust_level = chunk.metadata.get("trust_level", "official")
+        source_url = chunk.metadata.get("source_url", "")
+        lexical_confidence = _local_similarity(question, chunk)
+        return RagSearchResult(
+            reply=format_rag_reply(chunk, trust_level=trust_level),
+            source=format_rag_source(chunk),
+            confidence=semantic_confidence,
+            chunks=[ScoredChunk(chunk=chunk, score=semantic_confidence)],
+            is_strong=trust_level == "official",
+            trust_level=trust_level,
+            source_url=source_url,
+            retrieval_mode="semantic",
+            lexical_confidence=lexical_confidence,
+            semantic_confidence=semantic_confidence,
+            retrieval_query=question.strip(),
         )
 
 
