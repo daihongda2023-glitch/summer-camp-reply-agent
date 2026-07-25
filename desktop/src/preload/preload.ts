@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppSettingsUpdate, DesktopApi } from '../shared/types'
+import type { AppSettingsUpdate, DesktopApi, MessageScope, ReviewStatus } from '../shared/types'
 
 const desktopApi: DesktopApi = {
   getStatus: () => ipcRenderer.invoke('app:getStatus'),
@@ -9,12 +9,15 @@ const desktopApi: DesktopApi = {
   saveSettings: (settings: AppSettingsUpdate) => ipcRenderer.invoke('app:saveSettings', settings),
   getWorkTrace: () => ipcRenderer.invoke('app:getWorkTrace'),
   loadDemo: () => ipcRenderer.invoke('app:loadDemo'),
-  getItems: () => ipcRenderer.invoke('workbench:getItems'),
+  getItems: (scope: MessageScope = 'pending', reviewStatus: ReviewStatus | '' = '') =>
+    ipcRenderer.invoke('workbench:getItems', scope, reviewStatus),
   ask: (question: string) => ipcRenderer.invoke('workbench:ask', question),
   pasteReply: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:pasteReply', eventId, reply),
   publishReply: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:publishReply', eventId, reply),
   confirmSent: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:confirmSent', eventId, reply),
   saveCandidate: (eventId: string, reply: string) => ipcRenderer.invoke('workbench:saveCandidate', eventId, reply),
+  escalateMessage: (eventId: string, note: string) => ipcRenderer.invoke('workbench:escalateMessage', eventId, note),
+  completeReview: (eventId: string, note: string) => ipcRenderer.invoke('workbench:completeReview', eventId, note),
   startVision: () => ipcRenderer.invoke('vision:start'),
   stopVision: () => ipcRenderer.invoke('vision:stop'),
   captureVision: () => ipcRenderer.invoke('vision:capture'),

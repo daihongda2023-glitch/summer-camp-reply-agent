@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .chat_log_sanitizer import hash_identifier
 from .desktop_settings import DesktopSettings, DesktopSettingsStore
@@ -801,7 +801,8 @@ def serialize_vision_state(state: VisionState) -> dict[str, Any]:
 def create_handler(state: WorkbenchApiState):
     class WorkbenchRequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
             if path == "/":
                 self._send_json({"error": "桌面版已替代网页工作台"}, status=404)
                 return
@@ -809,7 +810,13 @@ def create_handler(state: WorkbenchApiState):
                 self._send_json(state.load_demo_items())
                 return
             if path == "/api/items":
-                self._send_json(state.list_items())
+                query = parse_qs(parsed.query)
+                self._send_json(
+                    state.list_items(
+                        scope=str(query.get("scope", ["pending"])[0]),
+                        review_status=str(query.get("review_status", [""])[0]),
+                    )
+                )
                 return
             if path == "/api/wechat/config":
                 self._send_json(state.get_wechat_config())
@@ -847,6 +854,22 @@ def create_handler(state: WorkbenchApiState):
                 if path == "/api/save-candidate":
                     self._send_json(
                         state.save_candidate(str(payload.get("event_id") or ""), str(payload.get("reply") or ""))
+                    )
+                    return
+                if path == "/api/messages/escalate":
+                    self._send_json(
+                        state.escalate_message(
+                            str(payload.get("event_id") or ""),
+                            str(payload.get("note") or ""),
+                        )
+                    )
+                    return
+                if path == "/api/messages/complete-review":
+                    self._send_json(
+                        state.complete_review(
+                            str(payload.get("event_id") or ""),
+                            str(payload.get("note") or ""),
+                        )
                     )
                     return
                 if path == "/api/wechat/config":

@@ -47,7 +47,8 @@ const fallbackWechatSettings: WeChatBridgeSettings = {
   poll_interval_seconds: 5,
   enabled: true,
   show_debug_config: false,
-  send_mode: 'manual_confirm'
+  send_mode: 'manual_confirm',
+  debug_review_mode: true
 }
 
 type WechatForm = {

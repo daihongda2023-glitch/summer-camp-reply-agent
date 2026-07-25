@@ -126,6 +126,8 @@ test('desktop api exposes workbench and vision operations', () => {
     'publishReply',
     'confirmSent',
     'saveCandidate',
+    'escalateMessage',
+    'completeReview',
     'startVision',
     'stopVision',
     'captureVision',
@@ -136,10 +138,15 @@ test('desktop api exposes workbench and vision operations', () => {
     assert.match(cjsPreload, new RegExp(`${name}:`))
   }
 
-  assert.match(main, /ipcMain\.handle\('workbench:getItems'/)
+  assert.match(main, /ipcMain\.handle\(\s*'workbench:getItems'/)
+  assert.match(main, /ipcMain\.handle\('workbench:escalateMessage'/)
+  assert.match(main, /ipcMain\.handle\('workbench:completeReview'/)
   assert.match(main, /ipcMain\.handle\('workbench:publishReply'/)
   assert.match(main, /ipcMain\.handle\('vision:capture'/)
   assert.match(main, /\/api\/items/)
+  assert.match(main, /scope=\$\{encodeURIComponent\(scope\)\}/)
+  assert.match(main, /\/api\/messages\/escalate/)
+  assert.match(main, /\/api\/messages\/complete-review/)
   assert.match(main, /\/api\/wechat\/publish/)
   assert.match(main, /\/api\/vision\/capture/)
 })
@@ -266,7 +273,7 @@ test('main process serializes renderer and background item pulls', () => {
   const main = read('src/main/main.ts')
 
   assert.match(main, /private itemFetchPromise/)
-  assert.match(main, /async getItems\(\): Promise<WorkbenchItemsPayload> \{[\s\S]*?return this\.fetchItems\(\)/)
+  assert.match(main, /async getItems\([\s\S]*?\): Promise<WorkbenchItemsPayload> \{[\s\S]*?return this\.fetchItems\(\)/)
   assert.match(main, /private async fetchItems\(\): Promise<WorkbenchItemsPayload>/)
   assert.match(main, /await this\.fetchItems\(\)/)
 })

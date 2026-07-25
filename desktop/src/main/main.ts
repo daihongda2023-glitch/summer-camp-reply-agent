@@ -8,7 +8,9 @@ import type {
   AppSettingsUpdate,
   AppStatus,
   DesktopSettings,
+  MessageScope,
   PasteReplyResult,
+  ReviewStatus,
   VisionCapturePayload,
   VisionStatus,
   WorkbenchItemPayload,
@@ -131,8 +133,15 @@ class PythonService {
     await this.request('/api/demo')
   }
 
-  async getItems(): Promise<WorkbenchItemsPayload> {
+  async getItems(
+    scope: MessageScope = 'pending',
+    reviewStatus: ReviewStatus | '' = ''
+  ): Promise<WorkbenchItemsPayload> {
     await this.ensureStarted()
+    if (scope !== 'pending' || reviewStatus) {
+      const query = `?scope=${encodeURIComponent(scope)}&review_status=${encodeURIComponent(reviewStatus)}`
+      return this.request<WorkbenchItemsPayload>(`/api/items${query}`)
+    }
     return this.fetchItems()
   }
 
@@ -196,6 +205,16 @@ class PythonService {
     if (!line) return
     this.logs.push(line)
     this.logs = this.logs.slice(-40)
+  }
+
+  async escalateMessage(eventId: string, note: string): Promise<ActionResult> {
+    await this.ensureStarted()
+    return this.request<ActionResult>('/api/messages/escalate', { event_id: eventId, note })
+  }
+
+  async completeReview(eventId: string, note: string): Promise<ActionResult> {
+    await this.ensureStarted()
+    return this.request<ActionResult>('/api/messages/complete-review', { event_id: eventId, note })
   }
 
   private scheduleItemPoll(delayMs = this.nextItemPollDelayMs): void {
@@ -329,12 +348,18 @@ app.whenReady().then(() => {
   ipcMain.handle('app:saveSettings', (_event, settings: AppSettingsUpdate) => service.saveSettings(settings))
   ipcMain.handle('app:getWorkTrace', () => service.getWorkTrace())
   ipcMain.handle('app:loadDemo', () => service.loadDemo())
-  ipcMain.handle('workbench:getItems', () => service.getItems())
+  ipcMain.handle(
+    'workbench:getItems',
+    (_event, scope: MessageScope = 'pending', reviewStatus: ReviewStatus | '' = '') =>
+      service.getItems(scope, reviewStatus)
+  )
   ipcMain.handle('workbench:ask', (_event, question: string) => service.ask(question))
   ipcMain.handle('workbench:pasteReply', (_event, eventId: string, reply: string) => service.pasteReply(eventId, reply))
   ipcMain.handle('workbench:publishReply', (_event, eventId: string, reply: string) => service.publishReply(eventId, reply))
   ipcMain.handle('workbench:confirmSent', (_event, eventId: string, reply: string) => service.confirmSent(eventId, reply))
   ipcMain.handle('workbench:saveCandidate', (_event, eventId: string, reply: string) => service.saveCandidate(eventId, reply))
+  ipcMain.handle('workbench:escalateMessage', (_event, eventId: string, note: string) => service.escalateMessage(eventId, note))
+  ipcMain.handle('workbench:completeReview', (_event, eventId: string, note: string) => service.completeReview(eventId, note))
   ipcMain.handle('vision:start', () => service.startVision())
   ipcMain.handle('vision:stop', () => service.stopVision())
   ipcMain.handle('vision:capture', () => service.captureVision())

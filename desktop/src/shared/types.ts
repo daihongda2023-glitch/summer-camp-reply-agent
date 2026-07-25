@@ -27,6 +27,7 @@ export interface WeChatBridgeSettings {
   enabled: boolean
   show_debug_config: boolean
   send_mode: string
+  debug_review_mode: boolean
 }
 
 export interface ReplySettings {
@@ -83,6 +84,7 @@ export type AppSettingsUpdate = Partial<DesktopSettings> & {
 }
 
 export interface WorkbenchItem {
+  message_id: string
   event_id: string
   group_name: string
   sender: string
@@ -114,7 +116,27 @@ export interface WorkbenchItem {
   rag_confidence: number
   rag_query: string
   reason: string
+  review_status: ReviewStatus
+  review_status_label: string
+  match_status: MatchStatus
+  match_status_label: string
+  unmatched_reasons: string[]
+  unmatched_reason_labels: string[]
+  review_action: string
+  review_note: string
+  created_at: string
+  updated_at: string
+  completed_at: string
 }
+
+export type MessageScope = 'pending' | 'all'
+export type ReviewStatus =
+  | 'pending_review'
+  | 'sent'
+  | 'escalated'
+  | 'candidate_saved'
+  | 'review_completed'
+export type MatchStatus = 'matched' | 'unmatched'
 
 export interface WorkbenchItemsPayload {
   items: WorkbenchItem[]
@@ -159,12 +181,14 @@ export interface DesktopApi {
   saveSettings(settings: AppSettingsUpdate): Promise<AppSettingsPayload>
   getWorkTrace(): Promise<WorkTracePayload>
   loadDemo(): Promise<void>
-  getItems(): Promise<WorkbenchItemsPayload>
+  getItems(scope?: MessageScope, reviewStatus?: ReviewStatus | ''): Promise<WorkbenchItemsPayload>
   ask(question: string): Promise<WorkbenchItemPayload>
   pasteReply(eventId: string, reply: string): Promise<PasteReplyResult>
   publishReply(eventId: string, reply: string): Promise<PasteReplyResult>
   confirmSent(eventId: string, reply: string): Promise<ActionResult>
   saveCandidate(eventId: string, reply: string): Promise<ActionResult>
+  escalateMessage(eventId: string, note: string): Promise<ActionResult>
+  completeReview(eventId: string, note: string): Promise<ActionResult>
   startVision(): Promise<VisionCapturePayload>
   stopVision(): Promise<VisionCapturePayload>
   captureVision(): Promise<VisionCapturePayload>

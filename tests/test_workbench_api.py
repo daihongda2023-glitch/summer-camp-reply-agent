@@ -122,6 +122,37 @@ class WorkbenchApiTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 404)
 
+    def test_items_http_route_supports_history_scope_and_review_status_filter(self):
+        from http.server import ThreadingHTTPServer
+        import threading
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            item = state.ask("报名入口在哪里？")["item"]
+            state.confirm_sent(item["message_id"], item["reply"])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = (
+                    f"http://127.0.0.1:{server.server_address[1]}/api/items"
+                    "?scope=all&review_status=sent"
+                )
+                payload = json.loads(
+                    urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["review_status"], "sent")
+
     def test_default_wechat_config_uses_target_group(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
