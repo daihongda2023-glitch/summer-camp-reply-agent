@@ -2,14 +2,105 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from summer_camp_agent.rag_ai import RagGenerationResult
 from summer_camp_agent.workbench_api import WorkbenchApiState, create_handler
 from summer_camp_agent.wechat_bridge_config import DEFAULT_GROUP_NAME
+from summer_camp_agent.workbench_models import ChatEvent
+from summer_camp_agent.workbench_store import WorkbenchInboxStore
 from summer_camp_agent.weflow_import import WeFlowSession
 
 
 class WorkbenchApiTest(unittest.TestCase):
+    def test_message_is_persisted_with_unique_key_and_moves_to_sent_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+
+            item = state.ask("报名入口在哪里？")["item"]
+            pending = state.list_items()["items"]
+            state.send_reply(item["message_id"], item["reply"])
+            remaining = state.list_items()["items"]
+            history = state.list_items(scope="all")["items"]
+            database_exists = (root / "workbench_messages.sqlite3").exists()
+
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["message_id"], pending[0]["event_id"])
+        self.assertEqual(pending[0]["review_status"], "pending_review")
+        self.assertEqual(remaining, [])
+        self.assertEqual(history[0]["review_status"], "sent")
+        self.assertTrue(history[0]["completed_at"])
+        self.assertTrue(database_exists)
+
+    def test_all_completion_actions_move_message_out_of_pending_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            sent = state.ask("报名入口在哪里？")["item"]
+            candidate = state.ask("住宿如何安排？")["item"]
+            escalated = state.ask("我为什么没有录取？")["item"]
+            completed = state.ask("收到，谢谢老师")["item"]
+
+            state.send_reply(sent["message_id"], sent["reply"])
+            state.save_candidate(candidate["message_id"], candidate["reply"])
+            state.escalate_message(escalated["message_id"], "需要老师人工确认")
+            state.complete_review(completed["message_id"], "无需回复")
+            statuses = {
+                item["message_id"]: item["review_status"]
+                for item in state.list_items(scope="all")["items"]
+            }
+            remaining = state.list_items()["items"]
+
+        self.assertEqual(remaining, [])
+        self.assertEqual(statuses[sent["message_id"]], "sent")
+        self.assertEqual(statuses[candidate["message_id"]], "candidate_saved")
+        self.assertEqual(statuses[escalated["message_id"]], "escalated")
+        self.assertEqual(statuses[completed["message_id"]], "review_completed")
+
+    def test_legacy_jsonl_inbox_migrates_once_and_restart_uses_snapshot(self):
+        event = ChatEvent(
+            "evt-legacy-migrate",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-25 10:00:00",
+            "报名入口在哪里？",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            WorkbenchInboxStore(root / "workbench_inbox.jsonl").upsert(event)
+            first = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            self.assertEqual(
+                [item["message_id"] for item in first.list_items()["items"]],
+                [event.event_id],
+            )
+
+            with patch(
+                "summer_camp_agent.workbench_session.WorkbenchSession.process_event",
+                side_effect=AssertionError("重启不应重新运行 AI"),
+            ):
+                restarted = WorkbenchApiState(
+                    candidate_path=root / "candidates.jsonl",
+                    log_path=root / "logs.jsonl",
+                )
+                restored = restarted.list_items()["items"]
+            legacy_inbox_kept = (root / "workbench_inbox.jsonl").exists()
+
+        self.assertEqual([item["message_id"] for item in restored], [event.event_id])
+        self.assertTrue(legacy_inbox_kept)
     def test_root_route_no_longer_serves_browser_workbench(self):
         from http.server import ThreadingHTTPServer
         import threading
@@ -144,11 +235,9 @@ class WorkbenchApiTest(unittest.TestCase):
 
             payload = state.load_demo_items()
 
-        statuses = {item["status"] for item in payload["items"]}
-        self.assertIn("待审核", statuses)
-        self.assertIn("转人工", statuses)
-        self.assertIn("待补充", statuses)
-        self.assertIn("未触发", statuses)
+        self.assertEqual({item["review_status"] for item in payload["items"]}, {"pending_review"})
+        self.assertTrue(all(item["status"] == "待审核" for item in payload["items"]))
+        self.assertTrue(all(item["mode"] == "draft" for item in payload["items"]))
 
     def test_work_trace_api_returns_recorded_processing_steps(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -337,6 +426,45 @@ class FakeRagAnswerGenerator:
 
 
 class WorkbenchWebWechatBridgeTest(unittest.TestCase):
+    def test_debug_listener_event_is_pending_with_confidences_and_unmatched_reasons(self):
+        event = ChatEvent(
+            "evt-debug-unmatched",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-25 12:00:00",
+            "今天天气不错",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.wechat_listener = FakeListener([event])
+
+            payload = state.poll_wechat_once()
+            item = payload["items"][0]
+
+        self.assertEqual(item["review_status"], "pending_review")
+        self.assertEqual(item["match_status"], "unmatched")
+        self.assertEqual(
+            item["unmatched_reasons"],
+            [
+                "missing_question_mark",
+                "missing_keyword",
+                "missing_agent_mention",
+            ],
+        )
+        self.assertIn("confidence", item)
+        self.assertIn("semantic_confidence", item)
+        self.assertIn("faq_confidence", item)
+        self.assertIn("rag_confidence", item)
+
     def test_unreplied_listener_event_survives_api_state_restart(self):
         from summer_camp_agent.workbench_models import ChatEvent
 
@@ -369,6 +497,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "poll_interval_seconds": 5,
                     "enabled": True,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             first.wechat_listener = FakeListener([event])
@@ -381,11 +510,11 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             )
             restored = restarted.list_items()["items"]
 
-        self.assertEqual(first_payload["items"][0]["status"], "待补充")
+        self.assertEqual(first_payload["items"][0]["status"], "待审核")
         self.assertEqual([item["question"] for item in restored], [event.content])
-        self.assertEqual(restored[0]["status"], "待补充")
+        self.assertEqual(restored[0]["status"], "待审核")
 
-    def test_successfully_replied_listener_event_is_removed_from_persistent_inbox(self):
+    def test_successfully_replied_listener_event_moves_to_history_and_keeps_legacy_inbox(self):
         from summer_camp_agent.workbench_models import ChatEvent
 
         event = ChatEvent(
@@ -417,6 +546,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "poll_interval_seconds": 5,
                     "enabled": True,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             first.paste_adapter = FakePasteAdapter()
@@ -431,8 +561,10 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             )
 
             self.assertTrue(inbox_path.exists())
-            self.assertEqual(inbox_path.read_text(encoding="utf-8"), "")
+            self.assertIn(event.event_id, inbox_path.read_text(encoding="utf-8"))
             self.assertEqual(restarted.list_items()["items"], [])
+            history = restarted.list_items(scope="all")["items"]
+            self.assertEqual(history[0]["review_status"], "sent")
 
     def test_start_listener_uses_saved_wechat_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -662,6 +794,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "poll_interval_seconds": 5,
                     "enabled": True,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             adapter = BlockingPasteAdapter()
@@ -718,15 +851,18 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
             state.wechat_listener = FakeListener([event])
 
             payload = state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
 
-            self.assertEqual(payload["items"][0]["mode"], "auto_send")
-            self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+            self.assertEqual(payload["items"], [])
+            self.assertEqual(history[0]["mode"], "auto_send")
+            self.assertEqual(state.paste_adapter.sent, [history[0]["reply"]])
             self.assertIn("auto_sent_to_wechat", (root / "logs.jsonl").read_text(encoding="utf-8"))
 
     def test_successful_auto_publish_marks_listener_event_as_replied(self):
@@ -761,6 +897,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
@@ -768,9 +905,10 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             state.wechat_listener = listener
 
             state.poll_wechat_once()
+            sent_reply = state.list_items(scope="all")["items"][0]["reply"]
 
         self.assertEqual(listener.replied_event_ids, ["evt-mark-replied"])
-        self.assertEqual(listener.sent_replies, [state.items[0].reply_decision.reply])
+        self.assertEqual(listener.sent_replies, [sent_reply])
 
     def test_repeated_publish_for_same_event_is_blocked_after_first_send(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -791,6 +929,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
@@ -852,21 +991,24 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
             state.wechat_listener = FakeListener([event])
 
             payload = state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
 
-        self.assertEqual(payload["items"][0]["intent"], "rag.document")
-        self.assertEqual(payload["items"][0]["mode"], "auto_send")
-        self.assertEqual(payload["items"][0]["generation_mode"], "rag_ai")
-        self.assertEqual(payload["items"][0]["generation_model"], "fake-model")
-        self.assertEqual(payload["items"][0]["generation_error"], "")
-        self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(history[0]["intent"], "rag.document")
+        self.assertEqual(history[0]["mode"], "auto_send")
+        self.assertEqual(history[0]["generation_mode"], "rag_ai")
+        self.assertEqual(history[0]["generation_model"], "fake-model")
+        self.assertEqual(history[0]["generation_error"], "")
+        self.assertEqual(state.paste_adapter.sent, [history[0]["reply"]])
         self.assertEqual(
-            payload["items"][0]["reply"],
+            history[0]["reply"],
             "AI 整理后的比赛镜像下载说明。",
         )
 
@@ -937,7 +1079,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
         self.assertEqual(state.wechat_listener.config.keywords, ["测试"])
         self.assertEqual(state.wechat_listener.config.group_name, "测试群")
 
-    def test_configure_wechat_reprocesses_existing_untriggered_items(self):
+    def test_configure_wechat_keeps_existing_review_snapshot_stable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = WorkbenchApiState(
@@ -960,9 +1102,10 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(initial["item"]["status"], "未触发")
-        self.assertNotEqual(payload["items"][0]["status"], "未触发")
-        self.assertEqual(payload["items"][0]["matched_keywords"], ["测试"])
+        self.assertEqual(initial["item"]["status"], "待审核")
+        self.assertEqual(initial["item"]["match_status"], "unmatched")
+        self.assertEqual(payload["items"][0]["match_status"], "unmatched")
+        self.assertEqual(payload["items"][0]["matched_keywords"], [])
 
     def test_paste_reply_logs_fill_but_not_confirmed_sent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1050,18 +1193,21 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
             item = state.ask("报名入口在哪里？")["item"]
 
             result = state.publish_reply(item["event_id"], item["reply"])
-            listed = state.list_items()["items"][0]
+            pending = state.list_items()["items"]
+            listed = state.list_items(scope="all")["items"][0]
 
             self.assertEqual(result["paste_action"], "sent_verified")
             self.assertEqual(state.paste_adapter.sent, [item["reply"]])
+            self.assertEqual(pending, [])
             self.assertTrue(listed["replied"])
-            self.assertEqual(listed["status"], "已回复")
+            self.assertEqual(listed["status"], "已发送")
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
             self.assertIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
@@ -1215,6 +1361,7 @@ class WorkbenchVisionApiTest(unittest.TestCase):
                     "enabled": True,
                     "show_debug_config": False,
                     "send_mode": "auto_send",
+                    "debug_review_mode": False,
                 }
             )
             state.paste_adapter = FakePasteAdapter()
@@ -1222,9 +1369,11 @@ class WorkbenchVisionApiTest(unittest.TestCase):
             state.vision_window_backend = FakeVisionWindowBackend()
 
             payload = state.capture_vision_once()
+            history = state.list_items(scope="all")["items"]
 
-        self.assertEqual(payload["items"][0]["mode"], "auto_send")
-        self.assertEqual(state.paste_adapter.sent, [payload["items"][0]["reply"]])
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(history[0]["mode"], "auto_send")
+        self.assertEqual(state.paste_adapter.sent, [history[0]["reply"]])
 
     def test_start_vision_polls_weflow_messages_first(self):
         from summer_camp_agent.workbench_models import ChatEvent

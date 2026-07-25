@@ -17,15 +17,19 @@ from .wechat_live_listener import WeFlowLiveListener
 from .wechat_vision import VisionState, WeChatVisionObserver
 from .wechat_window import WindowsWeChatWindowBackend
 from .weflow_import import WeFlowImportClient, WeFlowImportConfig, fetch_weflow_messages
-from .workbench_models import ChatEvent, GroupConfig
+from .workbench_message_store import WorkbenchMessageStore
+from .workbench_models import ChatEvent, GroupConfig, StoredWorkbenchMessage
 from .workbench_presenter import build_demo_events, format_item_summary, status_label
 from .work_trace import load_work_trace
 from .workbench_session import DEFAULT_CANDIDATE_PATH, DEFAULT_LOG_PATH, DEFAULT_TRACE_PATH, WorkbenchItem, WorkbenchSession
 from .workbench_sources import load_events_from_jsonl_text
 from .workbench_store import WorkbenchInboxStore
+from .workbench_trigger import unmatched_reason_codes
 
 
 DEFAULT_INBOX_PATH = Path(__file__).resolve().parents[1] / "data" / "workbench_inbox.jsonl"
+DEFAULT_MESSAGE_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "workbench_messages.sqlite3"
+LEGACY_INBOX_MIGRATION_KEY = "legacy_inbox_migrated_v1"
 
 
 class WorkbenchApiState:
@@ -35,6 +39,7 @@ class WorkbenchApiState:
         log_path: str | Path = DEFAULT_LOG_PATH,
         trace_path: str | Path | None = None,
         inbox_path: str | Path | None = None,
+        message_db_path: str | Path | None = None,
         group_config: GroupConfig | None = None,
         wechat_config_path: str | Path | None = None,
         desktop_settings_path: str | Path | None = None,
@@ -75,10 +80,18 @@ class WorkbenchApiState:
             )
         )
         self.inbox_store = WorkbenchInboxStore(resolved_inbox_path)
-        self.items = [
-            self.session.process_event(event)
-            for event in self.inbox_store.load()
-        ]
+        resolved_message_db_path = (
+            Path(message_db_path)
+            if message_db_path is not None
+            else (
+                isolated_data_root / "workbench_messages.sqlite3"
+                if isolated_data_root is not None
+                else DEFAULT_MESSAGE_DB_PATH
+            )
+        )
+        self.message_store = WorkbenchMessageStore(resolved_message_db_path)
+        self._migrate_legacy_inbox_once()
+        self.items = [message.item for message in self.message_store.list_pending()]
         self.wechat_listener = None
         self.wechat_listener_running = False
         self._poll_lock = RLock()
@@ -170,11 +183,11 @@ class WorkbenchApiState:
         return self.get_app_settings()
 
     def load_demo_items(self) -> dict[str, Any]:
-        self.items = [self.session.process_event(event) for event in build_demo_events()]
+        self._persist_events(build_demo_events())
         return self.list_items()
 
     def import_jsonl_text(self, text: str) -> dict[str, Any]:
-        self.items = [self.session.process_event(event) for event in load_events_from_jsonl_text(text)]
+        self._persist_events(load_events_from_jsonl_text(text))
         return self.list_items()
 
     def import_weflow_group(
@@ -207,32 +220,46 @@ class WorkbenchApiState:
                 daily_auto_reply_limit=self.group_config.daily_auto_reply_limit,
             )
         )
-        self.items = [
-            self.session.process_event(
-                ChatEvent(
-                    event_id=message.platform_message_id_hash,
-                    group_id_hash=message.group_id_hash,
-                    group_name=message.group_name,
-                    sender_alias=message.sender_alias,
-                    sender_role=message.sender_role,
-                    message_time=message.message_time,
-                    content=message.content,
-                    raw_type=str(message.raw_type),
-                    source=message.source,
-                )
+        events = [
+            ChatEvent(
+                event_id=message.platform_message_id_hash,
+                group_id_hash=message.group_id_hash,
+                group_name=message.group_name,
+                sender_alias=message.sender_alias,
+                sender_role=message.sender_role,
+                message_time=message.message_time,
+                content=message.content,
+                raw_type=str(message.raw_type),
+                source=message.source,
             )
             for message in fetched.messages
         ]
+        inserted_count = self._persist_events(events)
         return {
             "status": "ok",
-            "message": f"已从 WeFlow 导入 {len(self.items)} 条聊天记录：{fetched.group_name}",
+            "message": f"已从 WeFlow 导入 {inserted_count} 条聊天记录：{fetched.group_name}",
             "items": self._serialize_items(),
         }
 
-    def list_items(self) -> dict[str, Any]:
+    def list_items(
+        self,
+        *,
+        scope: str = "pending",
+        review_status: str = "",
+    ) -> dict[str, Any]:
         if self.wechat_listener_running and self.wechat_listener is not None:
             self._poll_wechat_listener()
-        return {"items": self._serialize_items()}
+        if scope not in {"pending", "all"}:
+            raise ValueError("scope 仅支持 pending 或 all")
+        if review_status:
+            records = self.message_store.list_all(review_status=review_status)
+        elif scope == "all":
+            records = self.message_store.list_all()
+        else:
+            records = self.message_store.list_pending()
+        if scope == "pending" and not review_status:
+            self.items = [record.item for record in records]
+        return {"items": [serialize_stored_message(record) for record in records]}
 
     def list_work_trace(self) -> dict[str, Any]:
         rows = load_work_trace(self.trace_path)
@@ -263,20 +290,42 @@ class WorkbenchApiState:
             raw_type="text",
             source="web_manual",
         )
-        item = self.session.process_event(event)
-        self.items.append(item)
-        return {"item": self._serialize_item(item), "items": self._serialize_items()}
+        record = self._persist_event(event)
+        return {
+            "item": serialize_stored_message(record),
+            "items": self._serialize_items(),
+        }
 
     def send_reply(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
+        if not reply.strip():
+            raise ValueError("回复内容不能为空")
         self.session.confirm_reply(item, reply)
+        self._complete_message(event_id, "sent", "send_reply", reply)
         return {"status": "ok", "message": "已记录发送动作"}
 
     def save_candidate(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
         if not self.session.save_candidate(item, reply):
             raise ValueError("候选回复不能为空")
+        self._complete_message(event_id, "candidate_saved", "save_candidate", reply)
         return {"status": "ok", "message": "已保存到待审核候选库"}
+
+    def escalate_message(self, event_id: str, note: str = "") -> dict[str, str]:
+        item = self._find_item(event_id)
+        self.session.record_operator_action(
+            item,
+            note or item.review_card.reply or item.event.content,
+            operator_action="escalated",
+            action="escalate",
+        )
+        self._complete_message(event_id, "escalated", "escalate", note)
+        return {"status": "ok", "message": "已转人工处理"}
+
+    def complete_review(self, event_id: str, note: str = "") -> dict[str, str]:
+        self._find_item(event_id)
+        self._complete_message(event_id, "review_completed", "complete_review", note)
+        return {"status": "ok", "message": "已完成审核"}
 
     def configure_wechat(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.wechat_config = WeChatBridgeConfig.from_dict(payload)
@@ -326,21 +375,29 @@ class WorkbenchApiState:
         return self._paste_result_payload(result)
 
     def publish_reply(self, event_id: str, reply: str) -> dict[str, str]:
+        if self.wechat_config.debug_review_mode:
+            raise ValueError("调试模式下禁止自动发送，请人工审核后确认。")
         if self.wechat_config.send_mode != SEND_MODE_AUTO_SEND:
             raise ValueError("请先在配置中选择系统自动发送，再使用自动发布。")
         with self._poll_lock:
             with self._publish_lock:
-                item = self._find_item(event_id)
-                if self._is_event_replied(item.event.event_id):
+                if self._is_event_replied(event_id):
                     raise ValueError("该消息已回复，已阻止重复发送。")
+                item = self._find_item(event_id)
                 publish_method = getattr(self.paste_adapter, "send_to_wechat_foreground", None)
                 if publish_method is None:
                     raise ValueError("当前粘贴适配器不支持自动发布。")
                 result = self._call_paste_method(publish_method, reply)
-                if getattr(result, "action", "") in {"sent_verified", "sent_unverified"}:
-                    self._mark_event_replied(item.event.event_id, reply)
                 operator_action = self._operator_action_for_publish_result(result)
                 self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
+                if getattr(result, "action", "") in {"sent_verified", "sent_unverified"}:
+                    self._mark_event_replied(item.event.event_id, reply)
+                    self._complete_message(
+                        event_id,
+                        "sent",
+                        "auto_publish",
+                        reply,
+                    )
                 return self._paste_result_payload(result)
 
     def _paste_result_payload(self, result: Any) -> dict[str, str]:
@@ -392,8 +449,11 @@ class WorkbenchApiState:
 
     def confirm_sent(self, event_id: str, reply: str) -> dict[str, str]:
         item = self._find_item(event_id)
+        if not reply.strip():
+            raise ValueError("回复内容不能为空")
         self.session.confirm_operator_sent(item, reply)
         self._mark_event_replied(item.event.event_id, reply)
+        self._complete_message(event_id, "sent", "confirm_sent", reply)
         return {"status": "ok", "message": "已记录运营确认发送"}
 
     def get_vision_status(self) -> dict[str, Any]:
@@ -453,8 +513,14 @@ class WorkbenchApiState:
         }
 
     def _find_item(self, event_id: str) -> WorkbenchItem:
+        record = self.message_store.get(event_id)
+        if record is not None:
+            if record.review_status != "pending_review":
+                raise ValueError("该消息已处理，不能重复操作")
+            return record.item
         for item in self.items:
             if item.event.event_id == event_id:
+                self._insert_pending_item(item)
                 return item
         raise ValueError("没有找到对应消息，请重新选择")
 
@@ -481,7 +547,8 @@ class WorkbenchApiState:
             self.wechat_listener = WeFlowLiveListener(self.wechat_config)
 
     def _reprocess_items(self) -> None:
-        self.items = [self.session.process_event(item.event) for item in self.items]
+        # 已生成的审核快照必须稳定保存；配置变化只影响后续新消息。
+        self.items = [record.item for record in self.message_store.list_pending()]
 
     def _poll_wechat_listener(self) -> None:
         with self._poll_lock:
@@ -502,14 +569,13 @@ class WorkbenchApiState:
             return self.wechat_listener.poll_once()
 
     def _append_listener_events(self, events: list[ChatEvent]) -> None:
-        existing_ids = {item.event.event_id for item in self.items}
         for event in events:
-            if event.event_id in existing_ids:
+            existing = self.message_store.get(event.event_id)
+            if existing is not None:
                 continue
             self.inbox_store.upsert(event)
-            item = self.session.process_event(event)
-            self.items.append(item)
-            existing_ids.add(event.event_id)
+            record = self._persist_event(event)
+            item = record.item
             if item.reply_decision.mode != "auto_send" or not item.reply_decision.reply.strip():
                 continue
             try:
@@ -520,10 +586,6 @@ class WorkbenchApiState:
 
     def _mark_event_replied(self, event_id: str, reply: str = "") -> None:
         self._replied_event_ids.add(event_id)
-        try:
-            self.inbox_store.remove(event_id)
-        except OSError as exc:
-            self.recent_logs.append(f"清理工作台收件箱失败：{exc}")
         mark_replied = getattr(self.wechat_listener, "mark_replied", None)
         if mark_replied is None:
             return
@@ -533,6 +595,9 @@ class WorkbenchApiState:
             self.recent_logs.append(f"保存已回复标记失败：{exc}")
 
     def _is_event_replied(self, event_id: str) -> bool:
+        record = self.message_store.get(event_id)
+        if record is not None and record.review_status == "sent":
+            return True
         if event_id in self._replied_event_ids:
             return True
         is_replied = getattr(self.wechat_listener, "is_replied", None)
@@ -545,11 +610,83 @@ class WorkbenchApiState:
             return True
 
     def _serialize_item(self, item: WorkbenchItem) -> dict[str, Any]:
+        record = self.message_store.get(item.event.event_id)
+        if record is not None:
+            return serialize_stored_message(record)
         replied = self._is_event_replied(item.event.event_id)
         return serialize_item(item, replied=replied)
 
     def _serialize_items(self) -> list[dict[str, Any]]:
-        return [self._serialize_item(item) for item in self.items]
+        records = self.message_store.list_pending()
+        self.items = [record.item for record in records]
+        return [serialize_stored_message(record) for record in records]
+
+    def _persist_events(self, events: list[ChatEvent]) -> int:
+        inserted = 0
+        for event in events:
+            if self.message_store.get(event.event_id) is not None:
+                continue
+            self._persist_event(event)
+            inserted += 1
+        return inserted
+
+    def _persist_event(self, event: ChatEvent) -> StoredWorkbenchMessage:
+        existing = self.message_store.get(event.event_id)
+        if existing is not None:
+            return existing
+        item = self.session.process_event(
+            event,
+            debug_review_mode=self.wechat_config.debug_review_mode,
+        )
+        self._insert_pending_item(item)
+        record = self.message_store.get(event.event_id)
+        assert record is not None
+        self.items = [message.item for message in self.message_store.list_pending()]
+        return record
+
+    def _insert_pending_item(self, item: WorkbenchItem) -> bool:
+        match_status = "matched" if item.trigger.should_process else "unmatched"
+        unmatched_reasons = unmatched_reason_codes(
+            item.event,
+            self.group_config,
+            item.trigger,
+        )
+        return self.message_store.insert_pending(
+            item,
+            match_status,
+            unmatched_reasons,
+        )
+
+    def _complete_message(
+        self,
+        event_id: str,
+        review_status: str,
+        review_action: str,
+        review_note: str,
+    ) -> StoredWorkbenchMessage:
+        completed = self.message_store.complete(
+            event_id,
+            review_status,
+            review_action,
+            review_note,
+        )
+        self.items = [message.item for message in self.message_store.list_pending()]
+        return completed
+
+    def _migrate_legacy_inbox_once(self) -> None:
+        if self.message_store.get_metadata(LEGACY_INBOX_MIGRATION_KEY):
+            return
+        for event in self.inbox_store.load():
+            if self.message_store.get(event.event_id) is None:
+                item = self.session.process_event(
+                    event,
+                    debug_review_mode=self.wechat_config.debug_review_mode,
+                )
+                self._insert_pending_item(item)
+        self.message_store.set_metadata(
+            LEGACY_INBOX_MIGRATION_KEY,
+            datetime.now().isoformat(),
+        )
 
     def _default_trace_path(self, candidate_path: str | Path) -> Path:
         candidate = Path(candidate_path)
@@ -560,6 +697,7 @@ class WorkbenchApiState:
 
 def serialize_item(item: WorkbenchItem, *, replied: bool = False) -> dict[str, Any]:
     return {
+        "message_id": item.event.event_id,
         "event_id": item.event.event_id,
         "group_name": item.event.group_name,
         "sender": item.event.sender_alias,
@@ -592,6 +730,63 @@ def serialize_item(item: WorkbenchItem, *, replied: bool = False) -> dict[str, A
         "rag_query": item.review_card.rag_query,
         "reason": item.reply_decision.reason or item.review_card.reason,
     }
+
+
+REVIEW_STATUS_LABELS = {
+    "pending_review": "待审核",
+    "sent": "已发送",
+    "escalated": "已转人工",
+    "candidate_saved": "已存候选",
+    "review_completed": "审核完成",
+}
+MATCH_STATUS_LABELS = {
+    "matched": "已命中旧规则",
+    "unmatched": "未命中旧规则",
+}
+UNMATCHED_REASON_LABELS = {
+    "missing_question_mark": "没有问号",
+    "missing_keyword": "没有命中关键词",
+    "missing_agent_mention": "没有 @ 助手",
+}
+
+
+def serialize_stored_message(record: StoredWorkbenchMessage) -> dict[str, Any]:
+    replied = record.review_status == "sent"
+    payload = serialize_item(record.item, replied=replied)
+    review_label = REVIEW_STATUS_LABELS.get(
+        record.review_status,
+        record.review_status,
+    )
+    payload.update(
+        {
+            "message_id": record.message_id,
+            "review_status": record.review_status,
+            "review_status_label": review_label,
+            "match_status": record.match_status,
+            "match_status_label": MATCH_STATUS_LABELS.get(
+                record.match_status,
+                record.match_status,
+            ),
+            "unmatched_reasons": record.unmatched_reasons,
+            "unmatched_reason_labels": [
+                UNMATCHED_REASON_LABELS.get(code, code)
+                for code in record.unmatched_reasons
+            ],
+            "review_action": record.review_action,
+            "review_note": record.review_note,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "completed_at": record.completed_at,
+            "status": review_label,
+            "summary": (
+                f"[{review_label}] "
+                f"{record.item.event.message_time[-8:]} "
+                f"{record.item.event.sender_alias}："
+                f"{record.item.event.content}"
+            ),
+        }
+    )
+    return payload
 
 
 def serialize_vision_state(state: VisionState) -> dict[str, Any]:
