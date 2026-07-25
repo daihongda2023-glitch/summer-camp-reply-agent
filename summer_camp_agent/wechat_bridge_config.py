@@ -33,6 +33,7 @@ class WeChatBridgeConfig:
     enabled: bool = True
     show_debug_config: bool = False
     send_mode: str = SEND_MODE_MANUAL_CONFIRM
+    debug_review_mode: bool = True
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "WeChatBridgeConfig":
@@ -46,6 +47,7 @@ class WeChatBridgeConfig:
             enabled=bool(raw.get("enabled", True)),
             show_debug_config=bool(raw.get("show_debug_config", False)),
             send_mode=str(raw.get("send_mode") or SEND_MODE_MANUAL_CONFIRM),
+            debug_review_mode=bool(raw.get("debug_review_mode", True)),
         )
         config.validate()
         return config

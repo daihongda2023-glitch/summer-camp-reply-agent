@@ -188,6 +188,8 @@ class WeFlowLiveListener:
             raw_type=str(message.raw_type),
             source=message.source,
         )
+        if self.config.debug_review_mode:
+            return event
         trigger = TriggerEngine(
             GroupConfig(group_name=session.name, keywords=[*self.config.keywords])
         ).decide(event)

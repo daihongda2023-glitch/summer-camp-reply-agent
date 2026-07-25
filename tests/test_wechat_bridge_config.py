@@ -14,6 +14,13 @@ from summer_camp_agent.wechat_bridge_config import (
 
 
 class WeChatBridgeConfigTest(unittest.TestCase):
+    def test_debug_review_mode_defaults_to_true_and_round_trips(self):
+        self.assertTrue(WeChatBridgeConfig().debug_review_mode)
+        parsed = WeChatBridgeConfig.from_dict({"debug_review_mode": False})
+
+        self.assertFalse(parsed.debug_review_mode)
+        self.assertFalse(parsed.to_dict()["debug_review_mode"])
+
     def test_legacy_seen_events_are_migrated_to_replied_events(self):
         from summer_camp_agent.wechat_bridge_config import ListenerState
 
@@ -64,6 +71,7 @@ class WeChatBridgeConfigTest(unittest.TestCase):
                 keywords=["报名", "住宿"],
                 poll_interval_seconds=5,
                 enabled=True,
+                debug_review_mode=True,
             )
 
             store.save(config)
@@ -73,6 +81,8 @@ class WeChatBridgeConfigTest(unittest.TestCase):
         self.assertEqual(loaded.group_name, "测试群")
         self.assertEqual(loaded.keywords, ["报名", "住宿"])
         self.assertEqual(raw["token_env"], "WEFLOW_API_TOKEN")
+        self.assertTrue(loaded.debug_review_mode)
+        self.assertTrue(raw["debug_review_mode"])
         self.assertNotIn("token", raw)
         self.assertNotIn("access_token", raw)
         self.assertNotIn("secret-token", json.dumps(raw, ensure_ascii=False))

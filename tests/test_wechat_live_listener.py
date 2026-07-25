@@ -67,13 +67,75 @@ class MemoryStateStore(ListenerStateStore):
 
 
 class WeFlowLiveListenerTest(unittest.TestCase):
+    def test_debug_review_mode_returns_unmatched_text_message(self):
+        now = datetime(2026, 7, 25, 10, 0, 0)
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=True,
+            ),
+            state_store=MemoryStateStore(),
+            client=FakeClient(
+                messages=[
+                    {
+                        "sender": "wxid_student",
+                        "timestamp": int((now - timedelta(seconds=5)).timestamp()),
+                        "type": 0,
+                        "content": "今天天气不错",
+                        "platformMessageId": "msg-debug",
+                    }
+                ]
+            ),
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        result = listener.poll_once()
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(
+            [event.content for event in result.events],
+            ["今天天气不错"],
+        )
+
+    def test_formal_mode_still_filters_unmatched_text_message(self):
+        now = datetime(2026, 7, 25, 10, 0, 0)
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
+            state_store=MemoryStateStore(),
+            client=FakeClient(
+                messages=[
+                    {
+                        "sender": "wxid_student",
+                        "timestamp": int((now - timedelta(seconds=5)).timestamp()),
+                        "type": 0,
+                        "content": "今天天气不错",
+                        "platformMessageId": "msg-formal",
+                    }
+                ]
+            ),
+            token="fake-token",
+            clock=lambda: now,
+        )
+
+        self.assertEqual(listener.poll_once().events, [])
+
     def test_poll_once_ignores_all_messages_from_current_logged_in_account(self):
         now = datetime(2026, 7, 22, 23, 0, 0)
         sent_reply = "TileLang 资料已开放；测试集正在整理中。"
         test_question = "报名时间是什么时候？"
         store = MemoryStateStore()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试工具", keywords=["测试"]),
+            WeChatBridgeConfig(
+                group_name="测试工具",
+                keywords=["测试"],
+                debug_review_mode=False,
+            ),
             state_store=store,
             client=FakeClient(
                 sessions=[WeFlowSession(id="room@chatroom", name="测试工具", type="group")],
@@ -108,7 +170,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
     def test_poll_once_ignores_current_account_from_member_identity_when_message_has_no_account_name(self):
         now = datetime(2026, 7, 22, 23, 0, 0)
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试工具", keywords=[]),
+            WeChatBridgeConfig(
+                group_name="测试工具",
+                keywords=[],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=FakeClient(
                 sessions=[WeFlowSession(id="room@chatroom", name="测试工具", type="group")],
@@ -134,7 +200,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
     def test_poll_once_never_replays_replied_event_even_when_seen_messages_are_included(self):
         store = MemoryStateStore()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=store,
             client=FakeClient(),
             token="fake-token",
@@ -169,7 +239,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
             ]
         )
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["测试"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["测试"],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=fake_client,
             token="fake-token",
@@ -184,7 +258,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
     def test_poll_once_returns_new_chat_events_and_persists_seen_ids(self):
         store = MemoryStateStore()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=store,
             client=FakeClient(),
             token="fake-token",
@@ -204,7 +282,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
         store = MemoryStateStore()
         fake_client = FakeClient()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=store,
             client=fake_client,
             token="fake-token",
@@ -222,7 +304,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
         store = MemoryStateStore()
         fake_client = FakeClient()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="test group", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="test group",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=store,
             client=fake_client,
             token="fake-token",
@@ -240,7 +326,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
         now = datetime(2026, 6, 22, 12, 0, 0)
         fake_client = FakeClient()
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=fake_client,
             token="fake-token",
@@ -274,7 +364,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
             ]
         )
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="测试群", keywords=["报名"]),
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=fake_client,
             token="fake-token",
@@ -310,7 +404,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
             ]
         )
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="test group", keywords=["signup"]),
+            WeChatBridgeConfig(
+                group_name="test group",
+                keywords=["signup"],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=fake_client,
             token="fake-token",
@@ -355,7 +453,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
             ]
         )
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="test group", keywords=["signup"]),
+            WeChatBridgeConfig(
+                group_name="test group",
+                keywords=["signup"],
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=fake_client,
             token="fake-token",
@@ -372,7 +474,11 @@ class WeFlowLiveListenerTest(unittest.TestCase):
             config_path = Path(directory) / "WeFlow-config.json"
             config_path.write_text(json.dumps({"httpApiToken": ""}), encoding="utf-8")
             listener = WeFlowLiveListener(
-                WeChatBridgeConfig(group_name="测试群", token_env="MISSING_WEFLOW_TOKEN"),
+                WeChatBridgeConfig(
+                    group_name="测试群",
+                    token_env="MISSING_WEFLOW_TOKEN",
+                    debug_review_mode=False,
+                ),
                 state_store=MemoryStateStore(),
                 client=FakeClient(),
                 token="",
@@ -386,7 +492,10 @@ class WeFlowLiveListenerTest(unittest.TestCase):
 
     def test_poll_once_reports_group_not_found(self):
         listener = WeFlowLiveListener(
-            WeChatBridgeConfig(group_name="不存在的群"),
+            WeChatBridgeConfig(
+                group_name="不存在的群",
+                debug_review_mode=False,
+            ),
             state_store=MemoryStateStore(),
             client=FakeClient(sessions=[]),
             token="fake-token",
