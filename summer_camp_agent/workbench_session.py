@@ -67,7 +67,12 @@ class WorkbenchSession:
         self.trigger_engine = TriggerEngine(group_config)
         self.reply_modes = ReplyModeController(group_config)
 
-    def process_event(self, event: ChatEvent) -> WorkbenchItem:
+    def process_event(
+        self,
+        event: ChatEvent,
+        *,
+        debug_review_mode: bool = False,
+    ) -> WorkbenchItem:
         trigger = self.trigger_engine.decide(event)
         self._trace(
             event,
@@ -82,7 +87,7 @@ class WorkbenchSession:
                 "source": event.source,
             },
         )
-        if trigger.should_process:
+        if trigger.should_process or debug_review_mode:
             card = self.review.create_card(event.content)
         else:
             card = ReviewCard(
@@ -94,6 +99,15 @@ class WorkbenchSession:
                 reason="not_triggered",
             )
         decision = self.reply_modes.decide(trigger, card)
+        if debug_review_mode:
+            decision = ReplyDecision(
+                mode="draft",
+                reply=card.reply,
+                source=card.source,
+                confidence=card.confidence,
+                reason=card.reason or ("debug_unmatched" if not trigger.should_process else "debug_review"),
+                requires_review=True,
+            )
         self._trace(
             event,
             phase="think",
@@ -119,6 +133,7 @@ class WorkbenchSession:
                 "faq_confidence": card.faq_confidence,
                 "rag_confidence": card.rag_confidence,
                 "rag_query": card.rag_query,
+                "debug_review_mode": debug_review_mode,
             },
         )
         return WorkbenchItem(event=event, trigger=trigger, review_card=card, reply_decision=decision)

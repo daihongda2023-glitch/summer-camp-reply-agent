@@ -1,7 +1,7 @@
 import unittest
 
 from summer_camp_agent.workbench_models import ChatEvent, GroupConfig
-from summer_camp_agent.workbench_trigger import TriggerEngine
+from summer_camp_agent.workbench_trigger import TriggerEngine, unmatched_reason_codes
 
 
 class WorkbenchTriggerTest(unittest.TestCase):
@@ -68,6 +68,24 @@ class WorkbenchTriggerTest(unittest.TestCase):
 
         self.assertFalse(decision.should_process)
         self.assertEqual(decision.reasons, [])
+
+    def test_reports_all_unmatched_reason_codes_for_unrelated_chat(self):
+        config = GroupConfig(
+            group_name="夏令营咨询群",
+            keywords=["报名"],
+            agent_mentions=["@夏令营助手"],
+        )
+        event = self.make_event("今天天气不错")
+        decision = TriggerEngine(config).decide(event)
+
+        self.assertEqual(
+            unmatched_reason_codes(event, config, decision),
+            [
+                "missing_question_mark",
+                "missing_keyword",
+                "missing_agent_mention",
+            ],
+        )
 
     def test_ignores_media_message(self):
         config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])

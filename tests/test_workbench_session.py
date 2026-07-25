@@ -165,6 +165,68 @@ class WorkbenchSessionTest(unittest.TestCase):
         self.assertFalse(item.trigger.should_process)
         self.assertEqual(item.reply_decision.mode, "ignored")
 
+    def test_debug_review_mode_generates_review_card_for_unmatched_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(
+                    group_name="夏令营咨询群",
+                    mode="auto",
+                    keywords=["报名"],
+                ),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            event = ChatEvent(
+                "evt-debug-unmatched",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-07-25 10:00:00",
+                "今天天气不错",
+                "text",
+                "weflow_live",
+            )
+
+            item = session.process_event(event, debug_review_mode=True)
+
+        self.assertFalse(item.trigger.should_process)
+        self.assertNotEqual(item.review_card.action, "ignored")
+        self.assertEqual(item.reply_decision.mode, "draft")
+        self.assertTrue(item.reply_decision.requires_review)
+
+    def test_debug_review_mode_never_auto_sends_high_confidence_faq(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = WorkbenchSession(
+                group_config=GroupConfig(
+                    group_name="夏令营咨询群",
+                    mode="auto",
+                    keywords=["报名"],
+                ),
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+            )
+            event = ChatEvent(
+                "evt-debug-faq",
+                "sha256:group",
+                "夏令营咨询群",
+                "成员001",
+                "student",
+                "2026-07-25 10:05:00",
+                "报名入口在哪里？",
+                "text",
+                "weflow_live",
+            )
+
+            item = session.process_event(event, debug_review_mode=True)
+
+        self.assertTrue(item.trigger.should_process)
+        self.assertEqual(item.review_card.action, "auto_reply")
+        self.assertEqual(item.reply_decision.mode, "draft")
+        self.assertTrue(item.reply_decision.requires_review)
+
     def test_send_edited_reply_saves_candidate_and_log(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

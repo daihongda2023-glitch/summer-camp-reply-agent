@@ -46,3 +46,24 @@ class TriggerEngine:
             reasons.append("question_mark")
 
         return TriggerDecision(bool(reasons), reasons, matched_keywords)
+
+
+def unmatched_reason_codes(
+    event: ChatEvent,
+    config: GroupConfig,
+    decision: TriggerDecision | None = None,
+) -> list[str]:
+    """返回消息未命中旧触发规则的可解释原因。"""
+    trigger = decision or TriggerEngine(config).decide(event)
+    if trigger.should_process:
+        return []
+
+    text = event.content.strip()
+    reasons: list[str] = []
+    if not any(mark in text for mark in QUESTION_MARKS):
+        reasons.append("missing_question_mark")
+    if not any(keyword and keyword in text for keyword in config.keywords):
+        reasons.append("missing_keyword")
+    if not any(mention and mention in text for mention in config.agent_mentions):
+        reasons.append("missing_agent_mention")
+    return reasons
