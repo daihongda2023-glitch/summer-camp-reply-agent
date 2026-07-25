@@ -1,6 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from .workbench_session import WorkbenchItem
+
+
+REVIEW_STATUSES = {
+    "pending_review",
+    "sent",
+    "escalated",
+    "candidate_saved",
+    "review_completed",
+}
+MATCH_STATUSES = {"matched", "unmatched"}
 
 
 @dataclass(frozen=True)
@@ -86,3 +101,17 @@ class ReplyDecision:
     confidence: float = 0.0
     reason: str = ""
     requires_review: bool = True
+
+
+@dataclass(frozen=True)
+class StoredWorkbenchMessage:
+    message_id: str
+    item: "WorkbenchItem"
+    review_status: str
+    match_status: str
+    unmatched_reasons: list[str]
+    review_action: str = ""
+    review_note: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    completed_at: str = ""
