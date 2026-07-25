@@ -111,7 +111,12 @@ class WeFlowLiveListener:
                 event = self._event_from_raw(raw, session)
                 if event is None:
                     continue
-                if event.event_id in state.replied_event_ids:
+                # 调试模式的人工拉取需要把旧版本误标为“已回复”的已看消息
+                # 交给 SQLite 主存储重新核对；已有记录会在工作台按 event_id 去重。
+                if (
+                    event.event_id in state.replied_event_ids
+                    and not (self.config.debug_review_mode and include_seen)
+                ):
                     continue
                 if event.event_id in state.seen_event_ids and not include_seen:
                     continue

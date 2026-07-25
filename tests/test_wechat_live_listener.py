@@ -225,6 +225,41 @@ class WeFlowLiveListenerTest(unittest.TestCase):
 
         self.assertEqual(second.events, [])
 
+    def test_debug_manual_poll_replays_legacy_replied_event_for_database_reconciliation(self):
+        now = datetime(2026, 7, 25, 10, 0, 0)
+        store = MemoryStateStore()
+        listener = WeFlowLiveListener(
+            WeChatBridgeConfig(
+                group_name="测试群",
+                keywords=["报名"],
+                debug_review_mode=True,
+            ),
+            state_store=store,
+            client=FakeClient(
+                messages=[
+                    {
+                        "sender": "wxid_student",
+                        "timestamp": int((now - timedelta(seconds=5)).timestamp()),
+                        "type": 0,
+                        "content": "报名入口在哪里？",
+                        "platformMessageId": "msg-legacy-replied",
+                    }
+                ]
+            ),
+            token="fake-token",
+            clock=lambda: now,
+        )
+        first = listener.poll_once()
+        legacy_replied_event_id = first.events[0].event_id
+        listener.mark_replied(legacy_replied_event_id)
+
+        recovered = listener.poll_once(include_seen=True)
+
+        self.assertEqual(
+            [event.event_id for event in recovered.events],
+            [legacy_replied_event_id],
+        )
+
     def test_poll_once_keeps_question_trigger_even_without_configured_keyword(self):
         now = datetime(2026, 7, 21, 12, 0, 0)
         fake_client = FakeClient(
