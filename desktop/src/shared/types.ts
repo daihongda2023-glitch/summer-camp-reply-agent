@@ -43,6 +43,7 @@ export interface AppStatus {
     group_name: string
     send_mode: string
     poll_interval_seconds: number
+    debug_review_mode: boolean
   }
   settings: DesktopSettings
   recent_logs: string[]

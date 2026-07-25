@@ -94,7 +94,8 @@ class PythonService {
         listener_running: false,
         group_name: '未连接',
         send_mode: 'manual_confirm',
-        poll_interval_seconds: 5
+        poll_interval_seconds: 5,
+        debug_review_mode: true
       },
       settings: defaultSettings(),
       recent_logs: this.logs.slice(-20)

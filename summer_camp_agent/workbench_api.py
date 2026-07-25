@@ -123,6 +123,7 @@ class WorkbenchApiState:
                 "group_name": self.wechat_config.group_name,
                 "send_mode": self.wechat_config.send_mode,
                 "poll_interval_seconds": self.wechat_config.poll_interval_seconds,
+                "debug_review_mode": self.wechat_config.debug_review_mode,
             },
             "settings": self.desktop_settings.to_dict(),
             "recent_logs": self.recent_logs[-20:],

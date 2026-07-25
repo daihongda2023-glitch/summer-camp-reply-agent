@@ -5,7 +5,9 @@ import type {
   AppStatus,
   DesktopApi,
   DesktopSettings,
+  MessageScope,
   PasteReplyResult,
+  ReviewStatus,
   VisionStatus,
   WeChatBridgeSettings,
   WorkbenchItem,
@@ -32,7 +34,8 @@ const fallbackStatus: AppStatus = {
     listener_running: false,
     group_name: '未连接',
     send_mode: 'manual_confirm',
-    poll_interval_seconds: 5
+    poll_interval_seconds: 5,
+    debug_review_mode: true
   },
   settings: fallbackSettings,
   recent_logs: ['引擎尚未启动']
@@ -56,6 +59,7 @@ type WechatForm = {
   keywordsText: string
   poll_interval_seconds: number
   send_mode: string
+  debug_review_mode: boolean
 }
 
 function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
@@ -64,7 +68,8 @@ function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
     group_name: current.group_name,
     keywordsText: current.keywords.join(', '),
     poll_interval_seconds: current.poll_interval_seconds,
-    send_mode: current.send_mode || 'manual_confirm'
+    send_mode: current.send_mode || 'manual_confirm',
+    debug_review_mode: current.debug_review_mode ?? true
   }
 }
 
@@ -162,10 +167,14 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   const [itemsPayload, setItemsPayload] = useState<WorkbenchItemsPayload>({ items: [] })
   const [selectedId, setSelectedId] = useState('')
   const [replyDraft, setReplyDraft] = useState('')
+  const [reviewNote, setReviewNote] = useState('')
   const [manualQuestion, setManualQuestion] = useState('')
   const [message, setMessage] = useState('桌面工作台已就绪')
+  const [messageScope, setMessageScope] = useState<MessageScope>('pending')
+  const [reviewStatusFilter, setReviewStatusFilter] = useState<ReviewStatus | ''>('')
   const [vision, setVision] = useState<VisionStatus>({ running: false, window_title: '', last_message: '', last_error: '' })
-  const selected = itemsPayload.items.find((item) => item.event_id === selectedId) ?? itemsPayload.items[0]
+  const selected = itemsPayload.items.find((item) => item.message_id === selectedId) ?? itemsPayload.items[0]
+  const selectedIsPending = selected?.review_status === 'pending_review'
 
   useEffect(() => {
     void refreshItems()
@@ -173,8 +182,11 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
   }, [])
 
   useEffect(() => {
-    if (selected) setReplyDraft(selected.reply || '')
-  }, [selected?.event_id])
+    if (selected) {
+      setReplyDraft(selected.reply || '')
+      setReviewNote(selected.review_note || '')
+    }
+  }, [selected?.message_id])
 
   useEffect(() => {
     if (!vision.running) return
@@ -182,15 +194,29 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
     return () => window.clearInterval(timer)
   }, [vision.running, status.engine.poll_interval_seconds])
 
-  async function refreshItems() {
+  async function refreshItems(
+    nextScope: MessageScope = messageScope,
+    nextReviewStatus: ReviewStatus | '' = reviewStatusFilter
+  ) {
     try {
       const getItems = getDesktopMethod('getItems')
-      const payload = await getItems()
+      const payload = await getItems(nextScope, nextReviewStatus)
       setItemsPayload(payload)
-      setSelectedId((current) => current && payload.items.some((item) => item.event_id === current) ? current : payload.items[0]?.event_id ?? '')
+      setSelectedId((current) => current && payload.items.some((item) => item.message_id === current) ? current : payload.items[0]?.message_id ?? '')
     } catch (error) {
       setMessage(errorMessage(error))
     }
+  }
+
+  async function changeQueue(nextScope: MessageScope) {
+    setMessageScope(nextScope)
+    const nextReviewStatus = nextScope === 'all' ? reviewStatusFilter : ''
+    await refreshItems(nextScope, nextReviewStatus)
+  }
+
+  async function changeReviewStatus(nextReviewStatus: ReviewStatus | '') {
+    setReviewStatusFilter(nextReviewStatus)
+    await refreshItems('all', nextReviewStatus)
   }
 
   async function refreshVision() {
@@ -211,8 +237,10 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
       }
       const ask = getDesktopMethod('ask')
       const payload = await ask(question)
+      setMessageScope('pending')
+      setReviewStatusFilter('')
       setItemsPayload({ items: payload.items })
-      setSelectedId(payload.item.event_id)
+      setSelectedId(payload.item.message_id)
       setManualQuestion('')
       setMessage('已生成回复草稿')
     })
@@ -268,6 +296,33 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
       }
       const saveCandidate = getDesktopMethod('saveCandidate')
       const result = await saveCandidate(selected.event_id, replyDraft)
+      await refreshItems()
+      setMessage(result.message)
+    })
+  }
+
+  async function escalateMessage() {
+    await runAction('正在转人工处理...', async () => {
+      if (!selected) {
+        setMessage('请先选择一条消息')
+        return
+      }
+      const escalateMessage = getDesktopMethod('escalateMessage')
+      const result = await escalateMessage(selected.message_id, reviewNote)
+      await refreshItems()
+      setMessage(result.message)
+    })
+  }
+
+  async function completeReview() {
+    await runAction('正在完成审核...', async () => {
+      if (!selected) {
+        setMessage('请先选择一条消息')
+        return
+      }
+      const completeReview = getDesktopMethod('completeReview')
+      const result = await completeReview(selected.message_id, reviewNote)
+      await refreshItems()
       setMessage(result.message)
     })
   }
@@ -276,6 +331,8 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
     await runAction('正在启动视觉观察...', async () => {
       const startVision = getDesktopMethod('startVision')
       const payload = await startVision()
+      setMessageScope('pending')
+      setReviewStatusFilter('')
       setItemsPayload({ items: payload.items })
       setVision(payload.vision)
       setMessage(payload.message)
@@ -286,6 +343,8 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
     await runAction('正在识别当前窗口...', async () => {
       const captureVision = getDesktopMethod('captureVision')
       const payload = await captureVision()
+      setMessageScope('pending')
+      setReviewStatusFilter('')
       setItemsPayload({ items: payload.items })
       setVision(payload.vision)
       setMessage(payload.message)
@@ -351,7 +410,7 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
           <div className="workflow-actions">
             <button className="primary-action compact" type="button" onClick={startVision}>启动观察</button>
             <button className="ghost-action compact" type="button" onClick={captureVision}>识别当前窗口</button>
-            <button className="ghost-action compact" type="button" onClick={refreshItems}>刷新</button>
+            <button className="ghost-action compact" type="button" onClick={() => refreshItems()}>刷新</button>
             {vision.running && <button className="ghost-action compact" type="button" onClick={stopVision}>停止</button>}
           </div>
         </header>
@@ -365,27 +424,85 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
           <button className="secondary-action compact" type="button" onClick={generateDraft}>生成草稿</button>
         </section>
 
+        {status.engine.debug_review_mode && (
+          <div className="diagnostic-banner" role="status">
+            <strong>调试审核模式已开启</strong>
+            <span>所有文本消息都会进入待审核，系统不会自动发送。</span>
+          </div>
+        )}
+
         <section className="message-stream" aria-label="待处理消息">
-          <header>
-            <div>
-              <span className="eyebrow">第 2 步</span>
-              <h2>选择待处理消息</h2>
-            </div>
-            <strong>{itemsPayload.items.length} 条</strong>
-          </header>
+          <div className="message-stream-head">
+            <header>
+              <div>
+                <span className="eyebrow">第 2 步</span>
+                <h2>{messageScope === 'pending' ? '选择待处理消息' : '查看历史记录'}</h2>
+              </div>
+              <div className="queue-toolbar">
+                <div className="queue-tabs" role="tablist" aria-label="消息队列">
+                  <button
+                    role="tab"
+                    aria-selected={messageScope === 'pending'}
+                    className={messageScope === 'pending' ? 'active' : ''}
+                    type="button"
+                    onClick={() => changeQueue('pending')}
+                  >
+                    待审核
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={messageScope === 'all'}
+                    className={messageScope === 'all' ? 'active' : ''}
+                    type="button"
+                    onClick={() => changeQueue('all')}
+                  >
+                    历史记录
+                  </button>
+                </div>
+                <strong>{itemsPayload.items.length} 条</strong>
+              </div>
+            </header>
+            {messageScope === 'all' && (
+              <label className="history-filter" htmlFor="reviewStatusFilter">
+                <span>处理状态</span>
+                <select
+                  id="reviewStatusFilter"
+                  value={reviewStatusFilter}
+                  onChange={(event) => changeReviewStatus(event.target.value as ReviewStatus | '')}
+                >
+                  <option value="">全部状态</option>
+                  <option value="sent">已发送</option>
+                  <option value="escalated">已转人工</option>
+                  <option value="candidate_saved">已存候选</option>
+                  <option value="review_completed">审核完成</option>
+                </select>
+              </label>
+            )}
+          </div>
           <div className="message-list">
             {itemsPayload.items.length ? (
               itemsPayload.items.map((item) => (
-                <button key={item.event_id} className={`message-row ${selected?.event_id === item.event_id ? 'selected' : ''}`} type="button" onClick={() => setSelectedId(item.event_id)}>
-                  <span>{item.status}</span>
+                <button
+                  key={item.message_id}
+                  className={`message-row ${selected?.message_id === item.message_id ? 'selected' : ''}`}
+                  type="button"
+                  onClick={() => setSelectedId(item.message_id)}
+                >
+                  <span className="message-state">{item.review_status_label}</span>
                   <strong>{item.question}</strong>
-                  <small>{item.sender} · {item.source}</small>
+                  <small>
+                    {item.sender} · {item.match_status === 'matched' ? '已命中旧规则' : '未命中旧规则'}
+                  </small>
                 </button>
               ))
             ) : (
               <div className="empty-message-state" role="status">
-                <strong>暂无待处理消息</strong>
-                <span>点击“启动观察”监听微信，或在上方手动输入问题生成草稿。</span>
+                <strong>{messageScope === 'pending' ? '暂无待处理消息' : '暂无历史记录'}</strong>
+                <span>
+                  {messageScope === 'pending'
+                    ? '点击“启动观察”监听微信，或在上方手动输入问题生成草稿。'
+                    : '消息完成审核后会保留在这里。'}
+                </span>
               </div>
             )}
           </div>
@@ -399,13 +516,37 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
             </div>
             <p role="status">{message}</p>
           </div>
-          <textarea id="replyDraft" value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} />
-          <div className="reply-actions">
-            <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
-            <button className="secondary-action compact" type="button" onClick={publishReply}>自动发布</button>
-            <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
-            <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
-          </div>
+          <textarea
+            id="replyDraft"
+            value={replyDraft}
+            disabled={!selectedIsPending}
+            onChange={(event) => setReplyDraft(event.target.value)}
+          />
+          {selectedIsPending ? (
+            <>
+              <label className="review-note" htmlFor="reviewNote">
+                <span>处理备注（可选）</span>
+                <input
+                  id="reviewNote"
+                  value={reviewNote}
+                  onChange={(event) => setReviewNote(event.target.value)}
+                  placeholder="例如：需老师确认录取结果"
+                />
+              </label>
+              <div className="reply-actions">
+                <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
+                {!status.engine.debug_review_mode && (
+                  <button className="secondary-action compact" type="button" onClick={publishReply}>自动发布</button>
+                )}
+                <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
+                <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
+                <button className="ghost-action compact" type="button" onClick={escalateMessage}>转人工</button>
+                <button className="ghost-action compact" type="button" onClick={completeReview}>完成审核</button>
+              </div>
+            </>
+          ) : (
+            <p className="history-readonly">历史消息为只读状态；处理结果和时间可在右侧查看。</p>
+          )}
         </section>
       </section>
 
@@ -448,12 +589,24 @@ function errorMessage(error: unknown) {
 function DecisionSummary({ item }: { item: WorkbenchItem }) {
   return (
     <dl className="decision-grid">
+      <DetailRow label="消息主键" value={item.message_id} />
+      <DetailRow label="审核状态" value={item.review_status_label} />
+      <DetailRow
+        label="旧规则"
+        value={item.match_status === 'matched' ? '已命中旧规则' : '未命中旧规则'}
+      />
+      {item.match_status === 'unmatched' && (
+        <DetailRow
+          label="未命中原因"
+          value={item.unmatched_reason_labels.join('；') || '规则未返回原因'}
+        />
+      )}
       <DetailRow label="触发原因" value={item.trigger_reasons.join(', ') || '未触发'} />
       <DetailRow label="命中关键词" value={item.matched_keywords.join(', ') || '无'} />
       <DetailRow label="建议动作" value={item.recommendation || '无'} />
       <DetailRow label="处理模式" value={item.mode || '无'} />
       <DetailRow label="来源" value={item.answer_source || '无'} />
-      <DetailRow label="置信度" value={Number(item.confidence || 0).toFixed(2)} />
+      <DetailRow label="综合置信度" value={Number(item.confidence || 0).toFixed(2)} />
       <DetailRow label="AI 语义状态" value={item.semantic_status || '未启用'} />
       <DetailRow label="AI 识别意图" value={item.semantic_intent || '无'} />
       <DetailRow label="AI 标准问题" value={item.semantic_question || '无'} />
@@ -467,6 +620,8 @@ function DecisionSummary({ item }: { item: WorkbenchItem }) {
       <DetailRow label="生成模型" value={item.generation_model || '无'} />
       {item.generation_error && <DetailRow label="生成降级原因" value={item.generation_error} />}
       <DetailRow label="原因" value={item.reason || '无'} />
+      {item.review_note && <DetailRow label="处理备注" value={item.review_note} />}
+      {item.completed_at && <DetailRow label="处理时间" value={formatTime(item.completed_at)} />}
     </dl>
   )
 }
@@ -505,7 +660,8 @@ function SettingsWindow() {
         group_name: groupName,
         keywords,
         poll_interval_seconds: pollSeconds,
-        send_mode: wechatForm.send_mode
+        send_mode: wechatForm.send_mode,
+        debug_review_mode: wechatForm.debug_review_mode
       }
     })
     setPayload(nextPayload)
@@ -571,6 +727,11 @@ function SettingsWindow() {
               <option value="auto_send">系统自动发送</option>
             </select>
           </Field>
+          <Toggle
+            label="调试审核模式"
+            checked={wechatForm.debug_review_mode}
+            onChange={(value) => setWechatForm((current) => ({ ...current, debug_review_mode: value }))}
+          />
           <ReadOnlyLine label="接口" value={String(payload?.wechat.base_url ?? 'http://127.0.0.1:5031')} />
           <button className="secondary-action" type="button" onClick={saveWechatSettings}>保存微信桥接</button>
           {wechatMessage && <p className="save-message" role="status">{wechatMessage}</p>}

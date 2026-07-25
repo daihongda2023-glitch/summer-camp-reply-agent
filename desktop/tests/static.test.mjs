@@ -188,7 +188,7 @@ test('workbench layout has responsive narrow and wide viewport rules', () => {
 
   assert.match(app, /empty-message-state/)
   assert.match(css, /grid-template-columns:\s*232px minmax\(520px,\s*1fr\) 320px/)
-  assert.match(css, /grid-template-rows:\s*auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/)
+  assert.match(css, /grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/)
   assert.match(css, /\.primary-action\.compact\s*{[^}]*flex:\s*0 0 auto/s)
   assert.match(css, /@media \(max-width:\s*1180px\)/)
   assert.match(css, /@media \(max-width:\s*960px\)/)
@@ -205,7 +205,7 @@ test('workbench narrow viewport stacks panels without clipping content rows', ()
   assert.match(narrowBlock, /\.workbench-shell\s*{[^}]*grid-template-rows:\s*auto auto auto/s)
   assert.doesNotMatch(narrowBlock, /\.workbench-shell\s*{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s)
   assert.match(narrowBlock, /\.workbench-shell\s*{[^}]*overflow:\s*auto/s)
-  assert.match(narrowBlock, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto minmax\(300px,\s*auto\) minmax\(300px,\s*auto\)/s)
+  assert.match(narrowBlock, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto auto minmax\(300px,\s*auto\) minmax\(300px,\s*auto\)/s)
   assert.match(narrowBlock, /\.workbench-sidebar\s*{[^}]*min-height:\s*auto/s)
   assert.match(narrowBlock, /\.workflow-panel\s*{[^}]*min-height:\s*auto/s)
   assert.match(narrowBlock, /\.decision-panel\s*{[^}]*min-height:\s*auto/s)
@@ -214,7 +214,7 @@ test('workbench narrow viewport stacks panels without clipping content rows', ()
 test('workbench typography wraps inside narrow desktop cards', () => {
   const css = read('src/renderer/styles.css')
 
-  assert.match(css, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/s)
+  assert.match(css, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/s)
   assert.match(css, /\.workflow-header\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s)
   assert.match(css, /\.workflow-header h1\s*{[^}]*overflow-wrap:\s*anywhere/s)
   assert.match(css, /\.workflow-header h1\s*{[^}]*font-size:\s*clamp\(20px,\s*5vw,\s*24px\)/s)
@@ -227,7 +227,7 @@ test('workbench typography wraps inside narrow desktop cards', () => {
 test('workbench narrow layout keeps reply actions and detail labels readable', () => {
   const css = read('src/renderer/styles.css')
 
-  assert.match(css, /\.reply-composer\s*{[^}]*grid-template-rows:\s*auto minmax\(96px,\s*1fr\) auto/s)
+  assert.match(css, /\.reply-composer\s*{[^}]*grid-template-rows:\s*auto minmax\(96px,\s*1fr\) auto auto/s)
   assert.match(css, /\.reply-composer\s*{[^}]*overflow:\s*hidden/s)
   assert.match(css, /\.reply-composer textarea,[\s\S]*?height:\s*100%/s)
   assert.match(css, /\.decision-grid dt\s*{[^}]*word-break:\s*keep-all/s)
@@ -298,6 +298,47 @@ test('workbench refreshes replied status immediately after publish or confirmati
 
   assert.match(publishBlock, /await refreshItems\(\)/)
   assert.match(confirmBlock, /await refreshItems\(\)/)
+})
+
+test('workbench exposes pending and history review queues with diagnostic details', () => {
+  const app = read('src/renderer/App.tsx')
+  const css = read('src/renderer/styles.css')
+  const types = read('src/shared/types.ts')
+
+  assert.match(app, /待审核/)
+  assert.match(app, /历史记录/)
+  assert.match(app, /messageScope/)
+  assert.match(app, /reviewStatusFilter/)
+  assert.match(app, /getItems\(nextScope,\s*nextReviewStatus\)/)
+  assert.match(app, /未命中旧规则/)
+  assert.match(app, /未命中原因/)
+  assert.match(app, /调试审核模式已开启/)
+  assert.match(types, /review_status:\s*ReviewStatus/)
+  assert.match(types, /match_status:\s*MatchStatus/)
+  assert.match(types, /unmatched_reason_labels:\s*string\[\]/)
+  assert.match(css, /\.queue-tabs/)
+  assert.match(css, /\.diagnostic-banner/)
+})
+
+test('workbench review actions include escalation and explicit completion', () => {
+  const app = read('src/renderer/App.tsx')
+
+  assert.match(app, /async function escalateMessage/)
+  assert.match(app, /async function completeReview/)
+  assert.match(app, />转人工</)
+  assert.match(app, />完成审核</)
+  assert.match(app, /await refreshItems\(\)/)
+  assert.match(app, /处理备注（可选）/)
+})
+
+test('settings exposes the default-on debug review mode', () => {
+  const app = read('src/renderer/App.tsx')
+  const types = read('src/shared/types.ts')
+
+  assert.match(types, /debug_review_mode:\s*boolean/)
+  assert.match(app, /调试审核模式/)
+  assert.match(app, /checked=\{wechatForm\.debug_review_mode\}/)
+  assert.match(app, /debug_review_mode:\s*wechatForm\.debug_review_mode/)
 })
 
 test('paste result exposes precise compose statuses and safe fill messages', () => {
