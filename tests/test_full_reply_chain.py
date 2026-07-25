@@ -94,6 +94,7 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 "enabled": True,
                 "show_debug_config": False,
                 "send_mode": "auto_send",
+                "debug_review_mode": False,
             }
         )
         state.paste_adapter = SimulatedPublishAdapter()
@@ -124,16 +125,17 @@ class FullReplyChainSimulationTest(unittest.TestCase):
             ]
             state.wechat_listener = SimulatedListener(events)
 
-            payload = state.poll_wechat_once()
+            state.poll_wechat_once()
+            items = state.list_items(scope="all")["items"]
 
-        self.assertEqual(len(payload["items"]), len(utterances))
+        self.assertEqual(len(items), len(utterances))
         self.assertEqual(len(state.paste_adapter.sent), len(utterances))
-        self.assertTrue(all(item["status"] == "已回复" for item in payload["items"]))
-        self.assertTrue(all(item["mode"] == "auto_send" for item in payload["items"]))
-        self.assertTrue(all(item["generation_mode"] == "faq" for item in payload["items"]))
+        self.assertTrue(all(item["status"] == "已发送" for item in items))
+        self.assertTrue(all(item["mode"] == "auto_send" for item in items))
+        self.assertTrue(all(item["generation_mode"] == "faq" for item in items))
         self.assertEqual(generator.questions, [])
         self.assertEqual(
-            [item["intent"] for item in payload["items"]],
+            [item["intent"] for item in items],
             [intent for intent, _ in utterances],
         )
 
@@ -145,13 +147,14 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 [make_event("faq-registration-time", "报名时间是什么时候？")]
             )
 
-            payload = state.poll_wechat_once()
+            state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
 
-        item = payload["items"][0]
+        item = history[0]
         self.assertIn("question_mark", item["trigger_reasons"])
         self.assertEqual(item["intent"], "registration.deadline")
         self.assertEqual(item["mode"], "auto_send")
-        self.assertEqual(item["status"], "已回复")
+        self.assertEqual(item["status"], "已发送")
         self.assertIn("报名已于 2026 年 7 月 15 日截止", item["reply"])
         self.assertEqual(len(state.paste_adapter.sent), 1)
 
@@ -163,12 +166,13 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 [make_event("rag-simulation-1", "请问能否公开下载比赛镜像？")]
             )
 
-            payload = state.poll_wechat_once()
+            state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
 
-        item = payload["items"][0]
+        item = history[0]
         self.assertEqual(item["intent"], "rag.document")
         self.assertEqual(item["mode"], "auto_send")
-        self.assertEqual(item["status"], "已回复")
+        self.assertEqual(item["status"], "已发送")
         self.assertIn("https://developer.metax-tech.com/", item["reply"])
         self.assertIn("gitlink.org.cn/metax-maca/op_optimization/issues/19", item["answer_source"])
         self.assertEqual(len(state.paste_adapter.sent), 1)
@@ -190,14 +194,15 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 ]
             )
 
-            payload = state.poll_wechat_once()
+            state.poll_wechat_once()
+            items = state.list_items(scope="all")["items"]
 
-        self.assertEqual(len(payload["items"]), len(cases))
+        self.assertEqual(len(items), len(cases))
         self.assertEqual(len(state.paste_adapter.sent), len(cases))
         self.assertEqual(generator.questions, cases)
         for question, item, sent in zip(
             cases,
-            payload["items"],
+            items,
             state.paste_adapter.sent,
             strict=True,
         ):
@@ -206,7 +211,7 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 self.assertEqual(item["generation_mode"], "rag_ai")
                 self.assertEqual(item["generation_model"], "fake-model")
                 self.assertEqual(item["mode"], "auto_send")
-                self.assertEqual(item["status"], "已回复")
+                self.assertEqual(item["status"], "已发送")
                 self.assertEqual(sent[1], item["reply"])
 
     def test_community_and_unknown_questions_never_call_ai_or_auto_publish(self):
@@ -262,13 +267,12 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                     ]
                 )
 
-                payload = state.poll_wechat_once()
-
-                item = payload["items"][0]
+                state.poll_wechat_once()
+                item = state.list_items(scope="all")["items"][0]
                 self.assertEqual(item["generation_mode"], "rag_fallback")
                 self.assertEqual(item["generation_error"], failure.error)
                 self.assertEqual(item["mode"], "auto_send")
-                self.assertEqual(item["status"], "已回复")
+                self.assertEqual(item["status"], "已发送")
                 self.assertIn("developer.metax-tech.com", item["reply"])
                 self.assertEqual(state.paste_adapter.sent[0][1], item["reply"])
 

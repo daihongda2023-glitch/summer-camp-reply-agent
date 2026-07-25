@@ -177,16 +177,59 @@ status: open | resolved | added_to_kb | ignored
 - AI 返回 `not_grounded` 表示已有资料与问题相关，但资料不足以支持具体结论。系统会生成“已确认事实 + 尚未说明部分 + 核查渠道”的保守草稿，标记为 `rag_insufficient` 并进入待处理队列，不自动发送。
 - AI 返回未知候选 ID、多个候选、危险检索改写或越界字段时，语义结果作废并回退本地检索。
 
-### 持久化待处理收件箱
+### SQLite 消息主存储
 
-监听器拉到新消息后，系统先将原始 `ChatEvent` 原子写入 `data/workbench_inbox.jsonl`，再生成审核卡和回复决策：
+工作台消息以 `data/workbench_messages.sqlite3` 为唯一状态来源，`event_id`
+同时作为消息唯一主键。数据库保存原始事件、触发判断、审核卡、回复决策和处理结果的
+完整快照。相同 `event_id` 重复到达时不会新建记录，也不会把已经处理的消息重置成
+待审核。
 
-1. 未回复、发送失败或证据不足的消息保留在收件箱。
-2. 自动发送成功或运营确认已发送后，从收件箱删除对应事件。
-3. 工作台重启时从收件箱恢复消息并重新生成审核卡，但不会因恢复动作重复自动发送。
-4. 收件箱按事件 ID 去重，最多保留 500 条；临时文件写完后再替换正式文件，避免半写入状态。
+消息状态拆成两个相互独立的维度：
 
-`data/workbench_inbox.jsonl` 属于运行数据，已加入忽略规则，不提交到仓库。
+- `review_status`：`pending_review`、`sent`、`escalated`、
+  `candidate_saved`、`review_completed`。
+- `match_status`：`matched` 或 `unmatched`，只说明消息是否命中旧触发规则，
+  不决定消息是否进入审核。
+
+处理动作成功后直接更新同一主键记录：
+
+- 自动发送成功或“我已发送”更新为 `sent`。
+- 保存候选更新为 `candidate_saved`。
+- 转人工更新为 `escalated`。
+- 无需继续处理时更新为 `review_completed`。
+- 仅填入微信不代表已经发送，仍保持 `pending_review`。
+
+待审核列表只查询 `pending_review`；历史记录从同一数据库读取。应用重启时直接恢复
+持久化快照，不重新调用语义分析、FAQ、RAG 或回答生成服务。
+
+### 调试审核模式
+
+`debug_review_mode` 默认开启。该模式只接收目标群中其他成员发送的文本消息，仍排除
+自己发送、系统事件、非文本和回复回环消息。所有收到的文本都进入待审核：
+
+1. 命中旧问号、关键词或 @ 规则时记录 `match_status=matched`。
+2. 未命中时记录 `match_status=unmatched`，并说明缺少问号、配置关键词和 @ 助手中的
+   哪些信号。
+3. 无论 FAQ 或官方 RAG 置信度多高，回复决策都强制为人工审核草稿。
+4. 调试模式禁止自动发布；运营只能填入微信、确认已发送、保存候选、转人工或完成审核。
+
+每条审核记录展示四类分数：
+
+- `confidence`：本次回答卡采用的综合置信度。
+- `semantic_confidence`：AI 对语义归一化和知识候选选择的置信度。
+- `faq_confidence`：本地 FAQ 词面匹配分。
+- `rag_confidence`：本地 RAG 文档块词面匹配分。
+
+正式运行时可以关闭 `debug_review_mode`，恢复旧触发过滤和符合安全条件的自动发送。
+
+### 旧 JSONL 迁移与本地数据边界
+
+首次启动 SQLite 版本时，系统会读取旧
+`data/workbench_inbox.jsonl`，逐条按 `event_id` 幂等迁移，并在 SQLite 元数据表写入
+迁移完成标记。后续启动不再重复迁移，也不会修改或删除旧 JSONL，便于人工核对和回滚。
+
+SQLite 数据库、WAL/SHM 文件、旧收件箱、回复日志和聊天导入资料都属于本地运行数据，
+不得提交到 Git、同步到公共网盘或写入项目文档。仓库忽略规则已覆盖这些文件。
 
 ### OpenAI 配置
 
@@ -211,8 +254,11 @@ python -m scripts.verify_rag_ai_reply
 截图中三个现场问题的可重复语义闭环使用以下命令：
 
 ```text
-python -m scripts.verify_semantic_reply_scenarios
+python -m scripts.verify_debug_review_workflow
 ```
 
-该脚本使用确定性的语义分析与回答生成替身，不调用真实微信或 OpenAI。它验证两条有充分依据的问题完成模拟自动发送，评分原因证据不足的问题进入待处理队列，并在工作台重启后仍能恢复。
+该脚本使用确定性的语义分析与回答生成替身，不调用真实微信或 OpenAI，同时使用真实
+FAQ、RAG、SQLite 和审核状态流转。它验证截图中的三个问题以及一条完全未命中旧规则的
+普通文本最初都进入待审核且没有自动发送；随后分别完成审核、转人工或确认已发送，
+最后确认待审核数量为零，重启后也不会重新进入队列。
 

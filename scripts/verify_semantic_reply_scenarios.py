@@ -159,6 +159,7 @@ def run_verification(root: Path) -> dict[str, object]:
             "enabled": True,
             "show_debug_config": False,
             "send_mode": "auto_send",
+            "debug_review_mode": False,
         }
     )
     listener = ScenarioListener(_events())
@@ -167,7 +168,7 @@ def run_verification(root: Path) -> dict[str, object]:
     state.paste_adapter = paste_adapter
 
     payload = state.poll_wechat_once()
-    items = payload["items"]
+    items = state.list_items(scope="all")["items"]
 
     restarted = WorkbenchApiState(
         **paths,
