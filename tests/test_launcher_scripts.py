@@ -1,4 +1,6 @@
+import base64
 from pathlib import Path
+import re
 import unittest
 
 
@@ -61,6 +63,14 @@ class LauncherScriptsTest(unittest.TestCase):
         self.assertNotIn(r"D:\workspace\codex", script)
         self.assertIn(r"scripts\start_agent_workbench.ps1", script)
         self.assertIn("Start-Process", script)
+        encoded_root = re.search(
+            r'set "REPO_ROOT_B64=([^"]+)"',
+            script,
+        )
+        self.assertIsNotNone(encoded_root)
+        assert encoded_root is not None
+        decoded_root = base64.b64decode(encoded_root.group(1)).decode("utf-8")
+        self.assertEqual(Path(decoded_root).resolve(), ROOT.resolve())
 
     def test_desktop_launcher_starts_electron_app(self):
         script_path = ROOT / "scripts" / "start_desktop_app.ps1"

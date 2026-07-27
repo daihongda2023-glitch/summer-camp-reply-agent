@@ -3,7 +3,7 @@ setlocal
 chcp 65001 >nul
 
 set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-set "REPO_ROOT_B64=RDpcd29ya3NwYWNlXGNvZGV4XOiHquWKqOWbnuWkjWFnZW50"
+set "REPO_ROOT_B64=RDpcd29ya3NwYWNlMVxzdW1tZXItY2FtcC1yZXBseS1hZ2VudA=="
 set "BOOTSTRAP_LOG=%TEMP%\summer_camp_agent_launcher_bootstrap_%RANDOM%.log"
 
 > "%BOOTSTRAP_LOG%" echo Launching summer camp Agent launcher...

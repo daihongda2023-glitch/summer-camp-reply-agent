@@ -20,6 +20,7 @@ data/workbench_inbox.jsonl
 data/workbench_messages.sqlite3
 data/workbench_messages.sqlite3-shm
 data/workbench_messages.sqlite3-wal
+data/workbench_messages.sqlite3*.bak
 data/listener_state.json
 data/wechat_bridge_config.json
 data/desktop_settings.json
