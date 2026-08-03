@@ -23,6 +23,23 @@ class FakeHttpResponse:
         return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
 
 
+def chat_completion_response(payload):
+    return {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": json.dumps(payload, ensure_ascii=False),
+                    "role": "assistant",
+                },
+            }
+        ],
+        "model": "deepseek-v4-pro",
+        "object": "chat.completion",
+    }
+
+
 def official_result():
     chunk = IndexedChunk(
         chunk_id="chunk-1",
@@ -49,7 +66,7 @@ def official_result():
 
 
 class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
-    def test_sends_grounded_structured_response_request_and_parses_answer(self):
+    def test_sends_deepseek_chat_completion_request_and_parses_answer(self):
         captured = {}
 
         def fake_urlopen(request, timeout):
@@ -57,30 +74,17 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
             captured["timeout"] = timeout
             captured["body"] = json.loads(request.data.decode("utf-8"))
             return FakeHttpResponse(
-                {
-                    "output": [
-                        {
-                            "type": "message",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": json.dumps(
-                                        {
-                                            "answer": "可以在开发者社区下载比赛镜像。",
-                                            "grounded": True,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                }
-                            ],
-                        }
-                    ]
-                }
+                chat_completion_response(
+                    {
+                        "answer": "可以在开发者社区下载比赛镜像。",
+                        "grounded": True,
+                    }
+                )
             )
 
         generator = OpenAIRagAnswerGenerator(
             api_key="test-key",
-            model="gpt-test",
+            model="deepseek-v4-pro",
             timeout_seconds=7,
         )
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
@@ -88,32 +92,28 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
 
         self.assertEqual(result.status, "generated")
         self.assertEqual(result.answer, "可以在开发者社区下载比赛镜像。")
-        self.assertEqual(result.model, "gpt-test")
-        self.assertEqual(captured["url"], "https://api.openai.com/v1/responses")
+        self.assertEqual(result.model, "deepseek-v4-pro")
+        self.assertEqual(captured["url"], "https://api.deepseek.com/chat/completions")
         self.assertEqual(captured["timeout"], 7)
-        self.assertEqual(captured["body"]["model"], "gpt-test")
-        self.assertEqual(captured["body"]["text"]["format"]["type"], "json_schema")
-        self.assertIn("比赛镜像能下载吗？", captured["body"]["input"])
-        self.assertIn("可以通过开发者社区下载", captured["body"]["input"])
+        self.assertEqual(captured["body"]["model"], "deepseek-v4-pro")
+        self.assertEqual(captured["body"]["response_format"], {"type": "json_object"})
+        self.assertEqual(captured["body"]["thinking"], {"type": "disabled"})
+        self.assertFalse(captured["body"]["stream"])
+        self.assertNotIn("instructions", captured["body"])
+        self.assertNotIn("input", captured["body"])
+        self.assertEqual(
+            [message["role"] for message in captured["body"]["messages"]],
+            ["system", "user"],
+        )
+        request_text = captured["body"]["messages"][1]["content"]
+        self.assertIn("比赛镜像能下载吗？", request_text)
+        self.assertIn("可以通过开发者社区下载", request_text)
 
     def test_rejects_ungrounded_answer(self):
         generator = OpenAIRagAnswerGenerator(api_key="test-key")
-        response = {
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": json.dumps(
-                                {"answer": "猜测回复", "grounded": False},
-                                ensure_ascii=False,
-                            ),
-                        }
-                    ],
-                }
-            ]
-        }
+        response = chat_completion_response(
+            {"answer": "猜测回复", "grounded": False}
+        )
 
         with patch("urllib.request.urlopen", return_value=FakeHttpResponse(response)):
             result = generator.generate("问题", official_result())
@@ -123,25 +123,12 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
 
     def test_rejects_url_not_present_in_evidence(self):
         generator = OpenAIRagAnswerGenerator(api_key="test-key")
-        response = {
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": json.dumps(
-                                {
-                                    "answer": "请访问 https://invalid.example.com",
-                                    "grounded": True,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
-                    ],
-                }
-            ]
-        }
+        response = chat_completion_response(
+            {
+                "answer": "请访问 https://invalid.example.com",
+                "grounded": True,
+            }
+        )
 
         with patch("urllib.request.urlopen", return_value=FakeHttpResponse(response)):
             result = generator.generate("问题", official_result())
@@ -151,22 +138,9 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
 
     def test_rejects_reply_longer_than_limit(self):
         generator = OpenAIRagAnswerGenerator(api_key="test-key")
-        response = {
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": json.dumps(
-                                {"answer": "答" * 601, "grounded": True},
-                                ensure_ascii=False,
-                            ),
-                        }
-                    ],
-                }
-            ]
-        }
+        response = chat_completion_response(
+            {"answer": "答" * 601, "grounded": True}
+        )
 
         with patch("urllib.request.urlopen", return_value=FakeHttpResponse(response)):
             result = generator.generate("问题", official_result())
@@ -183,22 +157,9 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
         ]
         for answer, expected_error in cases:
             with self.subTest(answer=answer):
-                response = {
-                    "output": [
-                        {
-                            "type": "message",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": json.dumps(
-                                        {"answer": answer, "grounded": True},
-                                        ensure_ascii=False,
-                                    ),
-                                }
-                            ],
-                        }
-                    ]
-                }
+                response = chat_completion_response(
+                    {"answer": answer, "grounded": True}
+                )
                 with patch(
                     "urllib.request.urlopen",
                     return_value=FakeHttpResponse(response),
@@ -220,7 +181,7 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
     def test_maps_http_error_to_unavailable_without_leaking_response(self):
         generator = OpenAIRagAnswerGenerator(api_key="test-key")
         error = urllib.error.HTTPError(
-            "https://api.openai.com/v1/responses",
+            "https://api.deepseek.com/chat/completions",
             429,
             "rate limited",
             {},
@@ -247,7 +208,7 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
             ).encode("utf-8")
         )
         error = urllib.error.HTTPError(
-            "https://api.openai.com/v1/responses",
+            "https://api.deepseek.com/chat/completions",
             429,
             "quota exceeded",
             {},
@@ -278,7 +239,7 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
 
         with patch(
             "urllib.request.urlopen",
-            return_value=FakeHttpResponse({"output": []}),
+            return_value=FakeHttpResponse({"choices": []}),
         ):
             result = generator.generate("问题", official_result())
 
@@ -288,6 +249,14 @@ class OpenAIRagAnswerGeneratorTest(unittest.TestCase):
     def test_from_env_returns_none_without_key(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(OpenAIRagAnswerGenerator.from_env())
+
+    def test_from_env_uses_deepseek_v4_defaults(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
+            generator = OpenAIRagAnswerGenerator.from_env()
+
+        self.assertIsNotNone(generator)
+        self.assertEqual(generator.model, "deepseek-v4-pro")
+        self.assertEqual(generator.base_url, "https://api.deepseek.com")
 
 
 if __name__ == "__main__":

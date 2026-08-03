@@ -1,4 +1,4 @@
-"""使用真实 OpenAI、模拟微信收发，验证 RAG 自动回复闭环。"""
+"""使用真实 DeepSeek V4、模拟微信收发，验证 RAG 自动回复闭环。"""
 
 from __future__ import annotations
 
@@ -67,10 +67,35 @@ def make_event(index: int, question: str) -> ChatEvent:
     )
 
 
+def build_verification_wechat_config() -> dict[str, object]:
+    return {
+        "base_url": "http://127.0.0.1:5031",
+        "token_env": "WEFLOW_API_TOKEN",
+        "group_name": "测试群",
+        "session_id": "",
+        "keywords": ["测试"],
+        "poll_interval_seconds": 5,
+        "enabled": True,
+        "show_debug_config": False,
+        "send_mode": "auto_send",
+        "debug_review_mode": False,
+    }
+
+
+def collect_verification_items(
+    state: WorkbenchApiState,
+) -> list[dict[str, object]]:
+    return state.list_items(scope="all")["items"]
+
+
+def is_completed_auto_send(item: dict[str, object]) -> bool:
+    return item.get("status") == "已发送" and item.get("mode") == "auto_send"
+
+
 def main() -> int:
     generator = load_default_rag_answer_generator()
     if generator is None:
-        raise RuntimeError("未检测到 OPENAI_API_KEY，无法执行真实 AI 验证。")
+        raise RuntimeError("未检测到 OPENAI_API_KEY，无法执行真实 DeepSeek 验证。")
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -80,28 +105,16 @@ def main() -> int:
             wechat_config_path=root / "wechat_bridge_config.json",
             rag_answer_generator=generator,
         )
-        state.configure_wechat(
-            {
-                "base_url": "http://127.0.0.1:5031",
-                "token_env": "WEFLOW_API_TOKEN",
-                "group_name": "测试群",
-                "session_id": "",
-                "keywords": ["测试"],
-                "poll_interval_seconds": 5,
-                "enabled": True,
-                "show_debug_config": False,
-                "send_mode": "auto_send",
-            }
-        )
+        state.configure_wechat(build_verification_wechat_config())
         state.wechat_listener = SimulatedListener(
             [make_event(index, question) for index, question in enumerate(QUESTIONS)]
         )
         publisher = SimulatedPublishAdapter()
         state.paste_adapter = publisher
 
-        payload = state.poll_wechat_once()
+        state.poll_wechat_once()
+        items = collect_verification_items(state)
 
-    items = payload["items"]
     if len(items) != len(QUESTIONS):
         raise AssertionError(f"期望生成 {len(QUESTIONS)} 条回复，实际为 {len(items)} 条。")
     if len(publisher.sent) != len(QUESTIONS):
@@ -122,7 +135,7 @@ def main() -> int:
                 f"场景 {index} 未使用 AI：{item['generation_mode']}，"
                 f"原因：{item.get('generation_error', '')}"
             )
-        if item["status"] != "已回复" or item["mode"] != "auto_send":
+        if not is_completed_auto_send(item):
             raise AssertionError(f"场景 {index} 未完成自动回复闭环：{item}")
         if not item["reply"] or len(item["reply"]) > 600:
             raise AssertionError(f"场景 {index} 的回复为空或超过 600 字。")

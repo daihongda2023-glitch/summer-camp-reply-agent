@@ -78,7 +78,7 @@ class WorkbenchModesTest(unittest.TestCase):
         self.assertEqual(decision.mode, "auto_send")
         self.assertFalse(decision.requires_review)
 
-    def test_auto_mode_never_sends_community_rag_suggestion(self):
+    def test_auto_mode_sends_community_rag_when_rag_has_a_usable_reply(self):
         config = GroupConfig(group_name="咨询群", mode="auto")
         card = ReviewCard(
             original_question="cmake 构建失败怎么办？",
@@ -89,9 +89,46 @@ class WorkbenchModesTest(unittest.TestCase):
             intent="rag.document",
             source="GitLink 社区 Issue",
             confidence=0.95,
+            generation_mode="rag_community",
         )
 
         decision = ReplyModeController(config).decide(TriggerDecision(True, ["keyword"], ["构建"]), card)
+
+        self.assertEqual(decision.mode, "auto_send")
+        self.assertFalse(decision.requires_review)
+
+    def test_auto_mode_sends_faq_even_when_legacy_trigger_does_not_match(self):
+        config = GroupConfig(group_name="咨询群", mode="auto")
+        card = ReviewCard(
+            original_question="线下地点",
+            recommendation="send",
+            available_actions=[],
+            action="auto_reply",
+            reply="地点为上海交通大学、沐曦股份。",
+            intent="offline.location",
+            source="FAQ",
+            confidence=1.0,
+            generation_mode="faq",
+        )
+
+        decision = ReplyModeController(config).decide(TriggerDecision(False, [], []), card)
+
+        self.assertEqual(decision.mode, "auto_send")
+        self.assertFalse(decision.requires_review)
+
+    def test_auto_mode_marks_pending_when_faq_and_rag_both_miss(self):
+        config = GroupConfig(group_name="咨询群", mode="auto")
+        card = ReviewCard(
+            original_question="今天天气不错",
+            recommendation="mark_pending",
+            available_actions=[],
+            action="needs_info",
+            reply="当前资料没有明确说明。",
+            reason="unknown",
+            generation_mode="needs_info",
+        )
+
+        decision = ReplyModeController(config).decide(TriggerDecision(False, [], []), card)
 
         self.assertEqual(decision.mode, "mark_pending")
         self.assertTrue(decision.requires_review)

@@ -390,8 +390,11 @@ class WorkbenchApiState:
                     raise ValueError("当前粘贴适配器不支持自动发布。")
                 result = self._call_paste_method(publish_method, reply)
                 operator_action = self._operator_action_for_publish_result(result)
-                self.session.record_operator_action(item, reply, operator_action=operator_action, action="auto_publish")
-                if getattr(result, "action", "") in {"sent_verified", "sent_unverified"}:
+                send_succeeded = getattr(result, "action", "") in {
+                    "sent_verified",
+                    "sent_unverified",
+                }
+                if send_succeeded:
                     self._mark_event_replied(item.event.event_id, reply)
                     self._complete_message(
                         event_id,
@@ -399,6 +402,17 @@ class WorkbenchApiState:
                         "auto_publish",
                         reply,
                     )
+                try:
+                    self.session.record_operator_action(
+                        item,
+                        reply,
+                        operator_action=operator_action,
+                        action="auto_publish",
+                    )
+                except Exception as exc:
+                    if not send_succeeded:
+                        raise
+                    self.recent_logs.append(f"回复日志记录失败：{exc}")
                 return self._paste_result_payload(result)
 
     def _paste_result_payload(self, result: Any) -> dict[str, str]:
@@ -746,6 +760,7 @@ MATCH_STATUS_LABELS = {
 }
 UNMATCHED_REASON_LABELS = {
     "missing_question_mark": "没有问号",
+    "missing_question_word": "没有命中常用疑问词",
     "missing_keyword": "没有命中关键词",
     "missing_agent_mention": "没有 @ 助手",
 }

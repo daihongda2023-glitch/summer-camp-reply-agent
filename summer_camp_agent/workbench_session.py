@@ -87,7 +87,12 @@ class WorkbenchSession:
                 "source": event.source,
             },
         )
-        if trigger.should_process or debug_review_mode:
+        should_analyze = (
+            trigger.should_process
+            or debug_review_mode
+            or self.group_config.mode == "auto"
+        )
+        if should_analyze:
             card = self.review.create_card(event.content)
         else:
             card = ReviewCard(

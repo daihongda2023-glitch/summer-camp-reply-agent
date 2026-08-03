@@ -20,13 +20,14 @@ class DebugReviewWorkflowTest(unittest.TestCase):
             result["results"][ORDINARY_MESSAGE]["unmatched_reasons"],
             [
                 "missing_question_mark",
+                "missing_question_word",
                 "missing_keyword",
                 "missing_agent_mention",
             ],
         )
         self.assertEqual(
             result["results"][ORDINARY_MESSAGE]["unmatched_reason_labels"],
-            ["没有问号", "没有命中关键词", "没有 @ 助手"],
+            ["没有问号", "没有命中常用疑问词", "没有命中关键词", "没有 @ 助手"],
         )
         for question in QUESTIONS:
             with self.subTest(question=question):

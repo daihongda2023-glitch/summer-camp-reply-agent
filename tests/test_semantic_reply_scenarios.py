@@ -10,7 +10,7 @@ from scripts.verify_semantic_reply_scenarios import (
 
 
 class SemanticReplyScenarioTest(unittest.TestCase):
-    def test_three_reported_questions_complete_reply_and_pending_loop(self):
+    def test_three_reported_questions_auto_send_when_faq_or_rag_hits(self):
         with tempfile.TemporaryDirectory() as directory:
             result = run_verification(Path(directory))
 
@@ -24,8 +24,8 @@ class SemanticReplyScenarioTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
 
-        self.assertEqual(scoring["mode"], "mark_pending")
-        self.assertFalse(scoring["replied"])
+        self.assertEqual(scoring["mode"], "auto_send")
+        self.assertTrue(scoring["replied"])
         self.assertEqual(scoring["generation_mode"], "rag_insufficient")
         self.assertEqual(scoring["semantic_intent"], "evaluation.scoring")
         self.assertEqual(scoring["semantic_confidence"], 0.94)
@@ -62,9 +62,9 @@ class SemanticReplyScenarioTest(unittest.TestCase):
 
         self.assertEqual(
             result["sent_replies"],
-            [support["reply"], location["reply"]],
+            [scoring["reply"], support["reply"], location["reply"]],
         )
-        self.assertEqual(result["pending_after_restart"], [QUESTIONS[0]])
+        self.assertEqual(result["pending_after_restart"], [])
 
 
 if __name__ == "__main__":

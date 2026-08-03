@@ -24,7 +24,10 @@ UNSAFE_QUERY_PATTERN = re.compile(
 SYSTEM_INSTRUCTIONS = """你是夏令营咨询系统的语义路由器，只做意图识别和知识目录选择。
 只能选择输入目录中真实存在的 FAQ ID 或 RAG 文档块 ID；不要回答学生问题，不要补充事实。
 将自然问法改写成最多三条简短检索问题。证据可能不足时可以不给候选，并说明需要人工。
-输出必须严格符合给定 JSON Schema，不要输出 Markdown 或分析过程。"""
+只输出 JSON 对象，不要输出 Markdown 或分析过程。对象必须包含：
+canonical_question（字符串）、intent（字符串）、faq_candidate_ids（字符串数组）、
+rag_candidate_ids（字符串数组）、rag_queries（最多三个字符串）、semantic_confidence（0 到 1 的数字）、
+requires_human（布尔值）和 reason（字符串）。不得输出其他字段。"""
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,7 @@ class OpenAISemanticAnalyzer:
         catalog: SemanticCatalog,
     ) -> SemanticAnalysisResult:
         request = urllib.request.Request(
-            f"{self.base_url}/responses",
+            f"{self.base_url}/chat/completions",
             data=json.dumps(
                 _request_payload(self.model, question, catalog),
                 ensure_ascii=False,
@@ -149,81 +152,43 @@ def _request_payload(
     }
     return {
         "model": model,
-        "instructions": SYSTEM_INSTRUCTIONS,
-        "input": (
-            f"学生问题：\n{question.strip()}\n\n"
-            f"可选知识目录：\n{json.dumps(catalog_payload, ensure_ascii=False)}"
-        ),
-        "reasoning": {"effort": "none"},
-        "max_output_tokens": 600,
-        "store": False,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "semantic_route",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "canonical_question": {"type": "string"},
-                        "intent": {"type": "string"},
-                        "faq_candidate_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "rag_candidate_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "rag_queries": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "maxItems": MAX_RAG_QUERIES,
-                        },
-                        "semantic_confidence": {
-                            "type": "number",
-                            "minimum": 0,
-                            "maximum": 1,
-                        },
-                        "requires_human": {"type": "boolean"},
-                        "reason": {"type": "string"},
-                    },
-                    "required": [
-                        "canonical_question",
-                        "intent",
-                        "faq_candidate_ids",
-                        "rag_candidate_ids",
-                        "rag_queries",
-                        "semantic_confidence",
-                        "requires_human",
-                        "reason",
-                    ],
-                    "additionalProperties": False,
-                },
-            }
-        },
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+            {
+                "role": "user",
+                "content": (
+                    f"学生问题：\n{question.strip()}\n\n"
+                    f"可选知识目录：\n"
+                    f"{json.dumps(catalog_payload, ensure_ascii=False)}"
+                ),
+            },
+        ],
+        "thinking": {"type": "disabled"},
+        "max_tokens": 600,
+        "stream": False,
+        "response_format": {"type": "json_object"},
     }
 
 
 def _parse_response(raw_body: str) -> dict[str, object]:
     response = json.loads(raw_body)
-    output = response.get("output") if isinstance(response, dict) else None
-    if not isinstance(output, list):
-        raise ValueError("Responses API 缺少 output。")
-    for item in output:
-        if not isinstance(item, dict) or item.get("type") != "message":
+    choices = response.get("choices") if isinstance(response, dict) else None
+    if not isinstance(choices, list):
+        raise ValueError("DeepSeek Chat Completions API 缺少 choices。")
+    for choice in choices:
+        if not isinstance(choice, dict):
             continue
-        content = item.get("content")
-        if not isinstance(content, list):
+        message = choice.get("message")
+        if not isinstance(message, dict):
             continue
-        for part in content:
-            if not isinstance(part, dict) or part.get("type") != "output_text":
-                continue
-            payload = json.loads(str(part.get("text") or ""))
-            if not isinstance(payload, dict):
-                raise ValueError("Responses API 语义输出不是对象。")
-            return payload
-    raise ValueError("Responses API 缺少 output_text。")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        payload = json.loads(content)
+        if not isinstance(payload, dict):
+            raise ValueError("DeepSeek 语义输出不是对象。")
+        return payload
+    raise ValueError("DeepSeek Chat Completions API 缺少消息内容。")
 
 
 def _validation_error(

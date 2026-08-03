@@ -11,14 +11,15 @@ from typing import Protocol
 from .rag_retriever import RagSearchResult
 
 
-DEFAULT_OPENAI_CHAT_MODEL = "gpt-5.6-luna"
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_CHAT_MODEL = "deepseek-v4-pro"
+DEFAULT_OPENAI_BASE_URL = "https://api.deepseek.com"
 MAX_GENERATED_REPLY_CHARS = 600
 URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\]}>\"']+")
 
 SYSTEM_INSTRUCTIONS = """你是夏令营咨询群回复助手。只能依据用户提供的官方证据回答。
 不得补充证据中没有的日期、数字、链接、规则或承诺；证据不足时将 grounded 设为 false。
-面向学生直接作答，使用简洁自然的中文，不输出 Markdown 标题、代码块或内部分析过程。"""
+面向学生直接作答，使用简洁自然的中文，不输出 Markdown 标题、代码块或内部分析过程。
+只输出 JSON 对象，且只能包含 answer 和 grounded 两个字段；answer 必须是字符串，grounded 必须是布尔值。"""
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class OpenAIRagAnswerGenerator:
         if not evidence:
             return RagGenerationResult("invalid", model=self.model, error="missing_evidence")
         request = urllib.request.Request(
-            f"{self.base_url}/responses",
+            f"{self.base_url}/chat/completions",
             data=json.dumps(
                 _request_payload(self.model, question, evidence),
                 ensure_ascii=False,
@@ -129,51 +130,44 @@ def _build_evidence(rag_result: RagSearchResult) -> str:
 def _request_payload(model: str, question: str, evidence: str) -> dict[str, object]:
     return {
         "model": model,
-        "instructions": SYSTEM_INSTRUCTIONS,
-        "input": f"学生问题：\n{question.strip()}\n\n官方证据：\n{evidence}",
-        "reasoning": {"effort": "none"},
-        "max_output_tokens": 500,
-        "store": False,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "rag_reply",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {"type": "string"},
-                        "grounded": {"type": "boolean"},
-                    },
-                    "required": ["answer", "grounded"],
-                    "additionalProperties": False,
-                },
-            }
-        },
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+            {
+                "role": "user",
+                "content": (
+                    f"学生问题：\n{question.strip()}\n\n"
+                    f"官方证据：\n{evidence}"
+                ),
+            },
+        ],
+        "thinking": {"type": "disabled"},
+        "max_tokens": 500,
+        "stream": False,
+        "response_format": {"type": "json_object"},
     }
 
 
 def _parse_response(raw_body: str) -> tuple[str, bool]:
     payload = json.loads(raw_body)
-    output = payload.get("output") if isinstance(payload, dict) else None
-    if not isinstance(output, list):
-        raise ValueError("Responses API 缺少 output。")
-    for item in output:
-        if not isinstance(item, dict) or item.get("type") != "message":
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list):
+        raise ValueError("DeepSeek Chat Completions API 缺少 choices。")
+    for choice in choices:
+        if not isinstance(choice, dict):
             continue
-        content = item.get("content")
-        if not isinstance(content, list):
+        message = choice.get("message")
+        if not isinstance(message, dict):
             continue
-        for part in content:
-            if not isinstance(part, dict) or part.get("type") != "output_text":
-                continue
-            parsed = json.loads(str(part.get("text") or ""))
-            answer = parsed.get("answer") if isinstance(parsed, dict) else None
-            grounded = parsed.get("grounded") if isinstance(parsed, dict) else None
-            if not isinstance(answer, str) or not isinstance(grounded, bool):
-                raise ValueError("Responses API 结构化输出字段类型错误。")
-            return answer, grounded
-    raise ValueError("Responses API 缺少 output_text。")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        parsed = json.loads(content)
+        answer = parsed.get("answer") if isinstance(parsed, dict) else None
+        grounded = parsed.get("grounded") if isinstance(parsed, dict) else None
+        if not isinstance(answer, str) or not isinstance(grounded, bool):
+            raise ValueError("DeepSeek 结构化输出字段类型错误。")
+        return answer, grounded
+    raise ValueError("DeepSeek Chat Completions API 缺少消息内容。")
 
 
 def validate_generated_answer(

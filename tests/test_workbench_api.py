@@ -487,6 +487,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             item["unmatched_reasons"],
             [
                 "missing_question_mark",
+                "missing_question_word",
                 "missing_keyword",
                 "missing_agent_mention",
             ],
@@ -896,6 +897,52 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             self.assertEqual(state.paste_adapter.sent, [history[0]["reply"]])
             self.assertIn("auto_sent_to_wechat", (root / "logs.jsonl").read_text(encoding="utf-8"))
 
+    def test_poll_wechat_once_auto_publishes_untriggered_faq_hit(self):
+        event = ChatEvent(
+            "evt-live-auto-untriggered-faq",
+            "sha256:group",
+            "测试群",
+            "成员001",
+            "student",
+            "2026-07-29 10:00:00",
+            "线下地点",
+            "text",
+            "weflow_live",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                    "debug_review_mode": False,
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            state.wechat_listener = FakeListener([event])
+
+            payload = state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
+
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(history[0]["match_status"], "unmatched")
+        self.assertEqual(history[0]["generation_mode"], "faq")
+        self.assertEqual(history[0]["mode"], "auto_send")
+        self.assertEqual(history[0]["review_status"], "sent")
+        self.assertEqual(state.paste_adapter.sent, [history[0]["reply"]])
+
     def test_successful_auto_publish_marks_listener_event_as_replied(self):
         from summer_camp_agent.workbench_models import ChatEvent
 
@@ -1242,6 +1289,46 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
             self.assertIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
+
+    def test_auto_send_marks_message_sent_even_when_reply_log_write_fails(self):
+        class FailingLogStore:
+            def append(self, entry):
+                raise OSError("disk full")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = WorkbenchApiState(
+                candidate_path=root / "candidates.jsonl",
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "base_url": "http://127.0.0.1:5031",
+                    "token_env": "WEFLOW_API_TOKEN",
+                    "group_name": "测试群",
+                    "session_id": "",
+                    "keywords": ["报名"],
+                    "poll_interval_seconds": 5,
+                    "enabled": True,
+                    "show_debug_config": False,
+                    "send_mode": "auto_send",
+                    "debug_review_mode": False,
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+            state.session.log_store = FailingLogStore()
+
+            result = state.publish_reply(item["event_id"], item["reply"])
+            pending = state.list_items()["items"]
+            history = state.list_items(scope="all")["items"]
+
+        self.assertEqual(result["paste_action"], "sent_verified")
+        self.assertEqual(pending, [])
+        self.assertEqual(history[0]["review_status"], "sent")
+        self.assertEqual(history[0]["review_action"], "auto_publish")
+        self.assertTrue(any("回复日志记录失败" in row for row in state.recent_logs))
 
     def test_confirm_sent_records_operator_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -61,6 +61,94 @@ class WorkbenchTriggerTest(unittest.TestCase):
         self.assertIn("question_mark", decision.reasons)
         self.assertEqual(decision.matched_keywords, [])
 
+    def test_triggers_on_common_question_words_without_question_mark(self):
+        config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
+        question_words = [
+            "为什么",
+            "为何",
+            "怎么回事",
+            "什么",
+            "是啥",
+            "有哪些",
+            "哪些",
+            "哪个",
+            "怎么",
+            "怎样",
+            "如何",
+            "怎么办",
+            "哪里",
+            "哪儿",
+            "在哪",
+            "什么地方",
+            "什么时候",
+            "何时",
+            "多久",
+            "几点",
+            "哪天",
+            "多少",
+            "几个",
+            "几次",
+            "几天",
+            "谁",
+            "找谁",
+            "联系谁",
+            "是否",
+            "是不是",
+            "有没有",
+            "能否",
+            "可否",
+            "可以吗",
+            "能不能",
+            "要不要",
+            "需不需要",
+            "是否需要",
+            "怎么样",
+            "进展如何",
+            "什么情况",
+            "咋",
+            "咋办",
+            "咋回事",
+            "啥",
+            "有啥",
+            "在哪儿",
+        ]
+
+        for question_word in question_words:
+            with self.subTest(question_word=question_word):
+                decision = TriggerEngine(config).decide(
+                    self.make_event(f"{question_word}处理")
+                )
+                self.assertTrue(decision.should_process)
+                self.assertIn("question_word", decision.reasons)
+                self.assertEqual(decision.matched_keywords, [])
+
+    def test_no_reply_expressions_do_not_trigger_question_words(self):
+        config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
+
+        for content in (
+            "没什么问题",
+            "没什么问题了。",
+            "没事了",
+            "不用了",
+            "不需要了",
+            "收到",
+            "知道了",
+            "明白了",
+        ):
+            with self.subTest(content=content):
+                decision = TriggerEngine(config).decide(self.make_event(content))
+                self.assertFalse(decision.should_process)
+
+    def test_no_reply_phrase_does_not_hide_a_later_question(self):
+        config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
+
+        decision = TriggerEngine(config).decide(
+            self.make_event("没什么问题，不过怎么联系老师")
+        )
+
+        self.assertTrue(decision.should_process)
+        self.assertIn("question_word", decision.reasons)
+
     def test_ignores_unrelated_chat(self):
         config = GroupConfig(group_name="夏令营咨询群", keywords=["报名"])
 
@@ -82,6 +170,7 @@ class WorkbenchTriggerTest(unittest.TestCase):
             unmatched_reason_codes(event, config, decision),
             [
                 "missing_question_mark",
+                "missing_question_word",
                 "missing_keyword",
                 "missing_agent_mention",
             ],

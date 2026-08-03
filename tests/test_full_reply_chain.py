@@ -214,7 +214,7 @@ class FullReplyChainSimulationTest(unittest.TestCase):
                 self.assertEqual(item["status"], "已发送")
                 self.assertEqual(sent[1], item["reply"])
 
-    def test_community_and_unknown_questions_never_call_ai_or_auto_publish(self):
+    def test_community_rag_auto_publishes_while_both_misses_stay_pending(self):
         questions = [
             "CMake 构建失败怎么办？",
             "营服是什么颜色？",
@@ -231,14 +231,21 @@ class FullReplyChainSimulationTest(unittest.TestCase):
             )
 
             payload = state.poll_wechat_once()
+            history = state.list_items(scope="all")["items"]
 
         self.assertEqual(generator.questions, [])
-        self.assertEqual(state.paste_adapter.sent, [])
-        self.assertEqual(
-            [item["generation_mode"] for item in payload["items"]],
-            ["rag_community", "needs_info"],
-        )
-        self.assertTrue(all(item["mode"] != "auto_send" for item in payload["items"]))
+        self.assertEqual(len(state.paste_adapter.sent), 1)
+        rows = {item["question"]: item for item in history}
+        community = rows[questions[0]]
+        unknown = rows[questions[1]]
+        self.assertEqual(community["generation_mode"], "rag_community")
+        self.assertEqual(community["mode"], "auto_send")
+        self.assertEqual(community["review_status"], "sent")
+        self.assertEqual(state.paste_adapter.sent[0][1], community["reply"])
+        self.assertEqual(unknown["generation_mode"], "needs_info")
+        self.assertEqual(unknown["mode"], "mark_pending")
+        self.assertEqual(unknown["review_status"], "pending_review")
+        self.assertEqual([item["question"] for item in payload["items"]], [questions[1]])
 
     def test_ai_failures_fall_back_to_official_rag_and_still_auto_publish(self):
         failures = [

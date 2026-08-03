@@ -9,7 +9,7 @@ class ReplyModeController:
         self.config = config
 
     def decide(self, trigger: TriggerDecision, card: ReviewCard) -> ReplyDecision:
-        if not trigger.should_process:
+        if not trigger.should_process and self.config.mode != "auto":
             return ReplyDecision(mode="ignored", reply="", reason="not_triggered", requires_review=False)
         if card.action == "human_fallback":
             return ReplyDecision(
@@ -19,6 +19,14 @@ class ReplyModeController:
                 confidence=card.confidence,
                 reason=card.reason,
                 requires_review=True,
+            )
+        if self.config.mode == "auto" and self._is_knowledge_hit(card):
+            return ReplyDecision(
+                mode="auto_send",
+                reply=card.reply,
+                source=card.source,
+                confidence=card.confidence,
+                requires_review=False,
             )
         if card.action != "auto_reply":
             return ReplyDecision(
@@ -47,6 +55,10 @@ class ReplyModeController:
         )
 
     def _can_auto_send(self, card: ReviewCard) -> bool:
-        # AnswerEngine 只会把命中的 FAQ 和高置信官方 RAG 标成 auto_reply；
-        # 社区 RAG、未知问题和人工兜底都在上层分支被拦截。
         return self.config.mode == "auto" and bool(card.source)
+
+    @staticmethod
+    def _is_knowledge_hit(card: ReviewCard) -> bool:
+        if not card.reply.strip() or not card.source.strip():
+            return False
+        return card.generation_mode == "faq" or card.generation_mode.startswith("rag_")

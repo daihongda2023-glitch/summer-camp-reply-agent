@@ -44,19 +44,20 @@ def catalog():
     )
 
 
-def structured_response(payload):
+def chat_completion_response(payload):
     return {
-        "output": [
+        "choices": [
             {
-                "type": "message",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": json.dumps(payload, ensure_ascii=False),
-                    }
-                ],
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": json.dumps(payload, ensure_ascii=False),
+                    "role": "assistant",
+                },
             }
-        ]
+        ],
+        "model": "deepseek-v4-pro",
+        "object": "chat.completion",
     }
 
 
@@ -76,18 +77,18 @@ def valid_payload(**overrides):
 
 
 class OpenAISemanticAnalyzerTest(unittest.TestCase):
-    def test_returns_validated_catalog_candidates_and_sends_heading_only_catalog(self):
+    def test_sends_deepseek_chat_completion_and_validates_catalog_candidates(self):
         captured = {}
 
         def fake_urlopen(request, timeout):
             captured["url"] = request.full_url
             captured["timeout"] = timeout
             captured["body"] = json.loads(request.data.decode("utf-8"))
-            return FakeHttpResponse(structured_response(valid_payload()))
+            return FakeHttpResponse(chat_completion_response(valid_payload()))
 
         analyzer = OpenAISemanticAnalyzer(
             api_key="test-key",
-            model="gpt-test",
+            model="deepseek-v4-pro",
             timeout_seconds=7,
         )
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
@@ -97,11 +98,19 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
         self.assertEqual(result.intent, "support.contact")
         self.assertEqual(result.rag_candidate_ids, ["rag-contact"])
         self.assertEqual(result.semantic_confidence, 0.94)
-        self.assertEqual(result.model, "gpt-test")
-        self.assertEqual(captured["url"], "https://api.openai.com/v1/responses")
+        self.assertEqual(result.model, "deepseek-v4-pro")
+        self.assertEqual(captured["url"], "https://api.deepseek.com/chat/completions")
         self.assertEqual(captured["timeout"], 7)
-        self.assertEqual(captured["body"]["text"]["format"]["type"], "json_schema")
-        request_text = captured["body"]["input"]
+        self.assertEqual(captured["body"]["response_format"], {"type": "json_object"})
+        self.assertEqual(captured["body"]["thinking"], {"type": "disabled"})
+        self.assertFalse(captured["body"]["stream"])
+        self.assertNotIn("instructions", captured["body"])
+        self.assertNotIn("input", captured["body"])
+        self.assertEqual(
+            [message["role"] for message in captured["body"]["messages"]],
+            ["system", "user"],
+        )
+        request_text = captured["body"]["messages"][1]["content"]
         self.assertIn("faq.offline.location", request_text)
         self.assertIn("rag-contact", request_text)
         self.assertIn("两个赛题联系人不一致", request_text)
@@ -112,7 +121,7 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
         with patch(
             "urllib.request.urlopen",
             return_value=FakeHttpResponse(
-                structured_response(
+                chat_completion_response(
                     valid_payload(
                         faq_candidate_ids=["unknown-faq"],
                         rag_candidate_ids=["unknown-rag"],
@@ -137,7 +146,9 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
                 with patch(
                     "urllib.request.urlopen",
                     return_value=FakeHttpResponse(
-                        structured_response(valid_payload(rag_queries=rag_queries))
+                        chat_completion_response(
+                            valid_payload(rag_queries=rag_queries)
+                        )
                     ),
                 ):
                     result = analyzer.analyze("问题", catalog())
@@ -154,7 +165,9 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
             with self.subTest(payload=payload):
                 with patch(
                     "urllib.request.urlopen",
-                    return_value=FakeHttpResponse(structured_response(payload)),
+                    return_value=FakeHttpResponse(
+                        chat_completion_response(payload)
+                    ),
                 ):
                     result = analyzer.analyze("问题", catalog())
                 self.assertEqual(result.status, "invalid")
@@ -173,7 +186,7 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
             ).encode("utf-8")
         )
         error = urllib.error.HTTPError(
-            "https://api.openai.com/v1/responses",
+            "https://api.deepseek.com/chat/completions",
             429,
             "quota exceeded",
             {},
@@ -195,7 +208,7 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
             (urllib.error.URLError("offline"), "network_error"),
             (
                 urllib.error.HTTPError(
-                    "https://api.openai.com/v1/responses",
+                    "https://api.deepseek.com/chat/completions",
                     500,
                     "server error",
                     {},
@@ -214,6 +227,14 @@ class OpenAISemanticAnalyzerTest(unittest.TestCase):
     def test_from_env_returns_none_without_api_key(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(OpenAISemanticAnalyzer.from_env())
+
+    def test_from_env_uses_deepseek_v4_defaults(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
+            analyzer = OpenAISemanticAnalyzer.from_env()
+
+        self.assertIsNotNone(analyzer)
+        self.assertEqual(analyzer.model, "deepseek-v4-pro")
+        self.assertEqual(analyzer.base_url, "https://api.deepseek.com")
 
 
 if __name__ == "__main__":
