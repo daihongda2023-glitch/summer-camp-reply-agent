@@ -24,6 +24,7 @@ class KnowledgeBaseTest(unittest.TestCase):
                     "question": "报名入口在哪里？",
                     "question_aliases": ["报名链接", "怎么报名"],
                     "answer": "当前资料中的报名入口为：https://v.wjx.cn/vm/r9BqUzR.aspx#",
+                    "expired_answer": "报名已经截止。",
                     "source": "招募文章",
                     "source_date": "2026-06",
                     "last_updated": "2026-06-20",
@@ -40,6 +41,7 @@ class KnowledgeBaseTest(unittest.TestCase):
 
         self.assertEqual(len(kb.items), 1)
         self.assertEqual(kb.items[0].intent, "registration.link")
+        self.assertEqual(kb.items[0].expired_answer, "报名已经截止。")
 
     def test_auto_reply_requires_source_metadata(self):
         path = self.write_items(

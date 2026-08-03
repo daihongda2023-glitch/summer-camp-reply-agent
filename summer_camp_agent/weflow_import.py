@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import Request, urlopen as default_urlopen
 
-from .chat_log_sanitizer import AliasRegistry, build_sanitized_message, hash_identifier
+from .chat_log_sanitizer import AliasRegistry, SanitizedMessage, build_sanitized_message, hash_identifier
 
 
 class WeFlowImportError(RuntimeError):
@@ -70,6 +70,68 @@ class WeFlowImportSummary:
     skipped_count: int
 
 
+@dataclass(frozen=True)
+class WeFlowFetchedMessages:
+    session_id_hash: str
+    group_name: str
+    pulled_count: int
+    messages: list[SanitizedMessage]
+
+    @property
+    def written_count(self) -> int:
+        return len(self.messages)
+
+    @property
+    def skipped_count(self) -> int:
+        return self.pulled_count - self.written_count
+
+
+def default_weflow_config_path() -> Path:
+    explicit_path = os.environ.get("WEFLOW_CONFIG_PATH", "").strip()
+    if explicit_path:
+        return Path(explicit_path)
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata) / "weflow" / "WeFlow-config.json"
+    return Path.home() / "AppData" / "Roaming" / "weflow" / "WeFlow-config.json"
+
+
+def resolve_weflow_token(
+    token_env: str = "WEFLOW_API_TOKEN",
+    *,
+    explicit_token: str | None = None,
+    config_path: str | Path | None = None,
+) -> str:
+    if explicit_token and explicit_token.strip():
+        return explicit_token.strip()
+
+    env_token = os.environ.get(token_env, "").strip()
+    if env_token:
+        return env_token
+
+    path = Path(config_path) if config_path is not None else default_weflow_config_path()
+    token_from_config = _read_weflow_config_token(path)
+    if token_from_config:
+        return token_from_config
+
+    raise WeFlowAuthError(
+        f"缺少 {token_env}，且未能从 WeFlow 配置读取 httpApiToken。"
+        "请先启动 WeFlow，本地 API 会由启动器自动启用；仍失败时请查看 WeFlow 配置。"
+    )
+
+
+def _read_weflow_config_token(path: Path) -> str:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ""
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WeFlowAuthError(f"WeFlow 配置读取失败：{path}。请重启 WeFlow 后再试。") from exc
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("httpApiToken") or "").strip()
+
+
 class WeFlowImportClient:
     def __init__(
         self,
@@ -88,11 +150,13 @@ class WeFlowImportClient:
         payload = self._get_json("/api/v1/sessions", {"format": "chatlab", "keyword": keyword, "limit": 100})
         raw_sessions = payload.get("sessions", [])
         sessions = []
+        normalized_keyword = keyword.strip().casefold()
         for raw in raw_sessions:
             if not isinstance(raw, dict):
                 continue
             session = _session_from_chatlab(raw)
-            if session.type == "group":
+            normalized_name = session.name.casefold()
+            if session.type == "group" and (not normalized_keyword or normalized_keyword in normalized_name):
                 sessions.append(session)
         return sessions
 
@@ -139,7 +203,7 @@ class WeFlowImportClient:
         except HTTPError as exc:
             if exc.code in (401, 403):
                 raise WeFlowAuthError("WeFlow API 鉴权失败，请检查 WEFLOW_API_TOKEN。") from exc
-            raise WeFlowHttpError(exc.code, f"WeFlow API 返回错误: HTTP {exc.code}") from exc
+            raise WeFlowHttpError(exc.code, _format_http_error_message(exc)) from exc
         except URLError as exc:
             raise WeFlowImportError("无法连接 WeFlow API，请确认 WeFlow 已启动并开启 API 服务。") from exc
         try:
@@ -151,60 +215,117 @@ class WeFlowImportClient:
         return payload
 
 
+def _format_http_error_message(exc: HTTPError) -> str:
+    message = f"WeFlow API 返回错误: HTTP {exc.code}"
+    detail = _read_http_error_detail(exc)
+    if detail:
+        message = f"{message}；{detail}"
+    if exc.code >= 500 and _looks_like_message_cursor_failure(detail):
+        message = (
+            f"{message}。检测到 WeFlow 无法打开微信消息数据库，请在 WeFlow 中重新指定微信数据目录，"
+            "确认微信已登录并能查看聊天记录，然后重启 WeFlow 后再试。"
+        )
+    return message
+
+
+def _read_http_error_detail(exc: HTTPError) -> str:
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        detail = text
+    else:
+        if isinstance(payload, dict):
+            detail = str(payload.get("error") or payload.get("message") or "")
+        else:
+            detail = str(payload)
+    return " ".join(detail.split())[:300]
+
+
+def _looks_like_message_cursor_failure(detail: str) -> bool:
+    lowered = detail.casefold()
+    return "创建游标失败" in detail or "no message db" in lowered or "-3" in detail
+
+
 def import_weflow_chat(
     config: WeFlowImportConfig,
     *,
     client: WeFlowImportClient | None = None,
     token: str | None = None,
 ) -> WeFlowImportSummary:
-    token_value = token or os.environ.get(config.token_env, "")
-    if not token_value:
-        raise WeFlowAuthError(f"缺少 {config.token_env}，请先设置 WeFlow API Token 环境变量。")
-    active_client = client or WeFlowImportClient(config.base_url, token_value)
-    session = _select_session(active_client, config)
+    fetched = fetch_weflow_messages(config, client=client, token=token)
     output_path = _build_output_path(config.output_dir, config.group_name, config.start, config.end)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        for message in fetched.messages:
+            handle.write(json.dumps(message.to_dict(), ensure_ascii=False) + "\n")
+
+    return WeFlowImportSummary(
+        output_path=output_path,
+        session_id_hash=fetched.session_id_hash,
+        group_name=fetched.group_name,
+        pulled_count=fetched.pulled_count,
+        written_count=fetched.written_count,
+        skipped_count=fetched.skipped_count,
+    )
+
+
+def fetch_weflow_messages(
+    config: WeFlowImportConfig,
+    *,
+    client: WeFlowImportClient | None = None,
+    token: str | None = None,
+) -> WeFlowFetchedMessages:
+    token_value = resolve_weflow_token(config.token_env, explicit_token=token)
+    active_client = client or WeFlowImportClient(config.base_url, token_value)
+    session = _select_session(active_client, config)
     since = _date_to_timestamp(config.start)
     end = _end_date_to_timestamp(config.end)
     alias_registry = AliasRegistry()
     seen_hashes: set[str] = set()
     pulled_count = 0
-    written_count = 0
+    fetched_messages: list[SanitizedMessage] = []
     offset = 0
 
-    with output_path.open("w", encoding="utf-8") as handle:
-        while True:
-            payload = active_client.pull_messages(session.id, since=since, end=end, limit=config.limit, offset=offset)
-            messages = payload.get("messages", [])
-            if not isinstance(messages, list):
-                raise WeFlowImportError("WeFlow API messages 字段不是列表。")
-            pulled_count += len(messages)
-            meta = payload.get("meta", {}) if isinstance(payload.get("meta", {}), dict) else {}
-            group_id = str(meta.get("groupId") or session.id)
-            for raw in messages:
-                if not isinstance(raw, dict):
-                    continue
-                message = _sanitize_chatlab_message(raw, config, session.name, group_id, alias_registry)
-                if message is None:
-                    continue
-                dedupe_key = message.platform_message_id_hash
-                if dedupe_key in seen_hashes:
-                    continue
-                seen_hashes.add(dedupe_key)
-                handle.write(json.dumps(message.to_dict(), ensure_ascii=False) + "\n")
-                written_count += 1
-            sync = payload.get("sync", {}) if isinstance(payload.get("sync", {}), dict) else {}
-            if not sync.get("hasMore"):
-                break
-            offset = int(sync.get("nextOffset") or offset + len(messages))
+    while True:
+        payload = active_client.pull_messages(session.id, since=since, end=end, limit=config.limit, offset=offset)
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            raise WeFlowImportError("WeFlow API messages 字段不是列表。")
+        pulled_count += len(messages)
+        meta = payload.get("meta", {}) if isinstance(payload.get("meta", {}), dict) else {}
+        group_id = str(meta.get("groupId") or session.id)
+        for raw in messages:
+            if not isinstance(raw, dict):
+                continue
+            message = _sanitize_chatlab_message(raw, config, session.name, group_id, alias_registry)
+            if message is None:
+                continue
+            dedupe_key = message.platform_message_id_hash
+            if dedupe_key in seen_hashes:
+                continue
+            seen_hashes.add(dedupe_key)
+            fetched_messages.append(message)
+        sync = payload.get("sync", {}) if isinstance(payload.get("sync", {}), dict) else {}
+        if not sync.get("hasMore"):
+            break
+        offset = int(sync.get("nextOffset") or offset + len(messages))
 
-    return WeFlowImportSummary(
-        output_path=output_path,
+    return WeFlowFetchedMessages(
         session_id_hash=hash_identifier(session.id),
         group_name=session.name,
         pulled_count=pulled_count,
-        written_count=written_count,
-        skipped_count=pulled_count - written_count,
+        messages=fetched_messages,
     )
 
 

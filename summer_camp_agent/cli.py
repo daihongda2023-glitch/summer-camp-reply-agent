@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date
 from pathlib import Path
 
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
+from .gitlink_issue_sync import GitLinkSyncError, sync_gitlink_issues
 from .knowledge import KnowledgeBase, KnowledgeValidationError
+from .rag_documents import RagDocumentError
+from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, RagEmbeddingError
+from .rag_index import RagIndexError, build_rag_index, load_rag_index
+from .rag_retriever import RagRetriever
+from .rag_runtime import create_embedding_provider, load_optional_rag_retriever
 from .review import OperatorReview, ReviewCard, save_pending_question
 from .weflow_import import (
     WeFlowAuthError,
@@ -27,12 +34,18 @@ def main(argv: list[str] | None = None) -> int:
     ask_parser.add_argument("question", help="学生问题")
     ask_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     ask_parser.add_argument("--knowledge", help="知识库 JSON 路径")
+    ask_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
+    ask_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
+    ask_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     review_parser = subparsers.add_parser("review", help="生成运营半自动审核卡")
     review_parser.add_argument("question", help="学生问题")
     review_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     review_parser.add_argument("--knowledge", help="知识库 JSON 路径")
     review_parser.add_argument("--pending-log", help="当建议标记待补充时，写入 JSONL 待确认清单")
+    review_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
+    review_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
+    review_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     validate_parser = subparsers.add_parser("validate", help="校验知识库结构和自动回复安全字段")
     validate_parser.add_argument("knowledge", nargs="?", help="知识库 JSON 路径，默认使用 data/faq.json")
@@ -49,6 +62,41 @@ def main(argv: list[str] | None = None) -> int:
     import_weflow_parser.add_argument("--token-env", default="WEFLOW_API_TOKEN", help="保存 WeFlow Token 的环境变量名")
     import_weflow_parser.add_argument("--include-media", action="store_true", help="保留纯媒体占位消息，不下载媒体文件")
 
+    rag_index_parser = subparsers.add_parser("rag-index", help="为正式资料生成本地 Embedding RAG 索引")
+    rag_index_parser.add_argument("--documents", default="data/rag/documents", help="正式资料目录")
+    rag_index_parser.add_argument("--index", default="data/rag/index", help="RAG 索引输出目录")
+    rag_index_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="Embedding 模型")
+    rag_index_parser.add_argument("--provider", choices=["openai", "static"], default="openai", help="Embedding provider，static 仅用于本地测试")
+    rag_index_parser.add_argument("--token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
+
+    rag_search_parser = subparsers.add_parser("rag-search", help="调试本地 RAG 索引的语义检索结果")
+    rag_search_parser.add_argument("question", help="要检索的问题")
+    rag_search_parser.add_argument("--index", default="data/rag/index", help="RAG 索引目录")
+    rag_search_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="Embedding 模型")
+    rag_search_parser.add_argument("--provider", choices=["openai", "static"], default="openai", help="Embedding provider，static 仅用于本地测试")
+    rag_search_parser.add_argument("--token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
+    rag_search_parser.add_argument("--top-k", type=int, default=4, help="返回的候选片段数量")
+
+    sync_gitlink_parser = subparsers.add_parser(
+        "sync-gitlink",
+        help="同步 GitLink Issue 问答并生成 RAG 文档快照",
+    )
+    sync_gitlink_parser.add_argument(
+        "--config",
+        default="data/gitlink_rag_sources.json",
+        help="GitLink 仓库与过滤规则配置",
+    )
+    sync_gitlink_parser.add_argument(
+        "--documents",
+        default="data/rag/documents/gitlink-issues",
+        help="生成文档目录",
+    )
+    sync_gitlink_parser.add_argument(
+        "--report",
+        default="data/rag/gitlink-sync-report.json",
+        help="同步报告路径",
+    )
+
     args = parser.parse_args(argv)
     try:
         if args.command == "ask":
@@ -59,9 +107,27 @@ def main(argv: list[str] | None = None) -> int:
             return _validate(args.knowledge)
         if args.command == "import-weflow":
             return _import_weflow(args)
+        if args.command == "rag-index":
+            return _rag_index(args)
+        if args.command == "rag-search":
+            return _rag_search(args)
+        if args.command == "sync-gitlink":
+            return _sync_gitlink(args)
     except KnowledgeValidationError as exc:
         print(f"知识库校验失败: {exc}", file=sys.stderr)
         return 1
+    except RagEmbeddingError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except RagIndexError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except RagDocumentError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except GitLinkSyncError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except WeFlowSessionSelectionRequired as exc:
         print(str(exc), file=sys.stderr)
         for index, session in enumerate(exc.sessions, start=1):
@@ -79,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
 def _ask(args: argparse.Namespace) -> int:
     kb = _load_knowledge(args.knowledge)
     today = date.fromisoformat(args.today) if args.today else None
-    result = AnswerEngine(kb, today=today).answer(args.question)
+    result = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args)).answer(args.question)
     print(f"action: {result.action}")
     if result.intent:
         print(f"intent: {result.intent}")
@@ -103,7 +169,7 @@ def _validate(path: str | None) -> int:
 def _review(args: argparse.Namespace) -> int:
     kb = _load_knowledge(args.knowledge)
     today = date.fromisoformat(args.today) if args.today else None
-    engine = AnswerEngine(kb, today=today)
+    engine = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args))
     card = OperatorReview(engine).create_card(args.question)
     pending_saved = False
     if args.pending_log and card.recommendation == "mark_pending":
@@ -135,6 +201,58 @@ def _import_weflow(args: argparse.Namespace) -> int:
     print(f"skipped_count: {summary.skipped_count}")
     print(f"output: {summary.output_path}")
     return 0
+
+
+def _rag_index(args: argparse.Namespace) -> int:
+    provider = _embedding_provider(args)
+    summary = build_rag_index(Path(args.documents), Path(args.index), provider)
+    print(f"documents: {args.documents}")
+    print(f"index: {summary.index_path}")
+    print(f"chunk_count: {summary.chunk_count}")
+    print(f"model: {provider.model}")
+    return 0
+
+
+def _rag_search(args: argparse.Namespace) -> int:
+    provider = _embedding_provider(args)
+    rag_index = load_rag_index(Path(args.index), expected_model=provider.model)
+    retriever = RagRetriever(rag_index, provider, top_k=args.top_k)
+    result = retriever.retrieve(args.question)
+    if result is None:
+        print("未命中可信资料片段。")
+        return 0
+    print(f"score: {result.confidence:.2f}")
+    print(f"source: {result.source}")
+    print("reply:")
+    print(result.reply)
+    print("chunks:")
+    for index, scored in enumerate(result.chunks, start=1):
+        print(f"{index}. score={scored.score:.2f} source={scored.chunk.source_title} heading={scored.chunk.heading}")
+    return 0
+
+
+def _sync_gitlink(args: argparse.Namespace) -> int:
+    summary = sync_gitlink_issues(args.config, args.documents, args.report)
+    print(f"fetched_issues: {summary.fetched_issues}")
+    print(f"generated_official: {summary.generated_official}")
+    print(f"generated_community: {summary.generated_community}")
+    print(f"skipped_by_reason: {json.dumps(summary.skipped_by_reason, ensure_ascii=False)}")
+    print(f"errors: {len(summary.errors)}")
+    print(f"documents: {args.documents}")
+    print(f"report: {args.report}")
+    return 0
+
+
+def _embedding_provider(args: argparse.Namespace):
+    return create_embedding_provider(provider_name=args.provider, model=args.model, token_env=args.token_env)
+
+
+def _optional_rag_retriever(args: argparse.Namespace):
+    return load_optional_rag_retriever(
+        index_path=args.rag_index,
+        provider_name=args.rag_provider,
+        token_env=args.rag_token_env,
+    )
 
 
 def _print_review_card(card: ReviewCard, pending_saved: bool) -> None:

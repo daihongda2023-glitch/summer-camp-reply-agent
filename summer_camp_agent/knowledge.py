@@ -21,6 +21,7 @@ class FAQItem:
     question: str
     question_aliases: list[str]
     answer: str
+    expired_answer: str
     source: str
     source_date: str
     last_updated: str
@@ -60,6 +61,7 @@ class FAQItem:
             question=str(raw["question"]).strip(),
             question_aliases=[str(value).strip() for value in raw["question_aliases"]],
             answer=str(raw["answer"]).strip(),
+            expired_answer=str(raw.get("expired_answer", "")).strip(),
             source=str(raw["source"]).strip(),
             source_date=str(raw["source_date"]).strip(),
             last_updated=str(raw["last_updated"]).strip(),
@@ -88,6 +90,8 @@ class FAQItem:
                 raise KnowledgeValidationError("answer is required for auto_reply")
         if not self.auto_reply and not self.human_fallback_reason:
             raise KnowledgeValidationError("human_fallback_reason is required when auto_reply is false")
+        if self.expired_answer and not self.auto_reply:
+            raise KnowledgeValidationError("expired_answer requires auto_reply")
         if self.valid_until:
             self._parse_date(self.valid_until, "valid_until")
 

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from summer_camp_agent.weflow_import import (
@@ -12,6 +13,7 @@ from summer_camp_agent.weflow_import import (
     WeFlowImportError,
     WeFlowSessionSelectionRequired,
     import_weflow_chat,
+    resolve_weflow_token,
 )
 
 
@@ -44,6 +46,37 @@ class FakeUrlOpen:
 
 
 class WeFlowImportTest(unittest.TestCase):
+    def test_resolve_weflow_token_prefers_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(json.dumps({"httpApiToken": "config-token"}), encoding="utf-8")
+
+            with patch.dict("os.environ", {"WEFLOW_API_TOKEN": "env-token"}, clear=False):
+                token = resolve_weflow_token(config_path=config_path)
+
+        self.assertEqual(token, "env-token")
+
+    def test_resolve_weflow_token_falls_back_to_weflow_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(
+                json.dumps({"httpApiToken": "config-token", "keep": "value"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {}, clear=True):
+                token = resolve_weflow_token(config_path=config_path)
+
+        self.assertEqual(token, "config-token")
+
+    def test_resolve_weflow_token_reports_actionable_missing_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "WeFlow-config.json"
+            config_path.write_text(json.dumps({"httpApiToken": ""}), encoding="utf-8")
+
+            with patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(WeFlowAuthError, "WeFlow 配置"):
+                resolve_weflow_token(config_path=config_path)
+
     def test_rejects_remote_base_url(self):
         with self.assertRaisesRegex(WeFlowImportError, "只允许连接本机"):
             WeFlowImportClient("https://example.com", "token")
@@ -56,6 +89,24 @@ class WeFlowImportTest(unittest.TestCase):
 
         self.assertEqual(sessions[0].id, "room@chatroom")
         self.assertEqual(opener.requests[0].headers["Authorization"], "Bearer secret-token")
+
+    def test_search_sessions_filters_unrelated_groups_when_api_ignores_keyword(self):
+        opener = FakeUrlOpen(
+            [
+                {
+                    "sessions": [
+                        {"id": "a@chatroom", "name": "无关群", "type": "group"},
+                        {"id": "b@chatroom", "name": "沐曦开源英才夏令营咨询群", "type": "group"},
+                        {"id": "channel", "name": "沐曦通知", "type": "channel"},
+                    ]
+                }
+            ]
+        )
+        client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=opener)
+
+        sessions = client.search_sessions("沐曦")
+
+        self.assertEqual([session.id for session in sessions], ["b@chatroom"])
 
     def test_import_writes_sanitized_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -132,6 +183,14 @@ class WeFlowImportTest(unittest.TestCase):
         client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=FakeUrlOpen([URLError("refused")]))
 
         with self.assertRaisesRegex(WeFlowImportError, "无法连接"):
+            client.search_sessions("测试")
+
+    def test_http_500_includes_weflow_error_body_and_cursor_hint(self):
+        response = BytesIO(json.dumps({"error": "创建游标失败: -3，请查看日志"}).encode("utf-8"))
+        server_error = HTTPError("http://127.0.0.1", 500, "Internal Server Error", {}, response)
+        client = WeFlowImportClient("http://127.0.0.1:5031", "token", urlopen=FakeUrlOpen([server_error]))
+
+        with self.assertRaisesRegex(WeFlowImportError, "消息数据库"):
             client.search_sessions("测试")
 
     def test_pull_messages_falls_back_to_legacy_messages_endpoint(self):
