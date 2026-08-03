@@ -3,6 +3,7 @@
 from datetime import datetime
 import inspect
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, RLock
@@ -10,7 +11,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .chat_log_sanitizer import hash_identifier
-from .desktop_settings import DesktopSettings, DesktopSettingsStore
+from .desktop_settings import DesktopSettings, DesktopSettingsStore, resolve_operation_profile
+from .rag_ai import DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CHAT_MODEL
 from .wechat_assisted_paste import AssistedPasteAdapter
 from .wechat_bridge_config import DEFAULT_GROUP_NAME, SEND_MODE_AUTO_SEND, WeChatBridgeConfig, WeChatBridgeConfigStore
 from .wechat_live_listener import WeFlowLiveListener
@@ -242,6 +244,45 @@ class WorkbenchApiState:
             "items": self._serialize_items(),
         }
 
+    def get_readiness(self) -> dict[str, Any]:
+        model = os.environ.get("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_CHAT_MODEL).strip()
+        base_url = os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL).strip()
+        ai_ready = bool(os.environ.get("OPENAI_API_KEY", "").strip() and model and base_url)
+        checks = [
+            {
+                "key": "engine",
+                "label": "本地服务",
+                "ready": self.app_running,
+                "detail": "运行中" if self.app_running else "等待启动",
+            },
+            {
+                "key": "group",
+                "label": "目标群聊",
+                "ready": bool(self.wechat_config.group_name.strip()),
+                "detail": self.wechat_config.group_name.strip() or "尚未配置目标群聊",
+            },
+            {
+                "key": "ai",
+                "label": "AI 配置",
+                "ready": ai_ready,
+                "detail": model if ai_ready else "缺少 OPENAI_API_KEY 或模型配置",
+            },
+            {
+                "key": "wechat",
+                "label": "微信监听",
+                "ready": self.wechat_listener_running,
+                "detail": "正在监听" if self.wechat_listener_running else "尚未开始观察",
+            },
+        ]
+        return {
+            "ready": all(item["ready"] for item in checks),
+            "operation_profile": resolve_operation_profile(
+                self.wechat_config.send_mode,
+                self.wechat_config.debug_review_mode,
+            ),
+            "checks": checks,
+        }
+
     def list_items(
         self,
         *,
@@ -403,6 +444,16 @@ class WorkbenchApiState:
                         reply,
                     )
                 try:
+                    if (
+                        send_succeeded
+                        and reply.strip()
+                        and reply.strip() != item.review_card.reply.strip()
+                    ):
+                        self.session.save_candidate(
+                            item,
+                            reply,
+                            candidate_type="operator_edit",
+                        )
                     self.session.record_operator_action(
                         item,
                         reply,
@@ -755,8 +806,8 @@ REVIEW_STATUS_LABELS = {
     "review_completed": "审核完成",
 }
 MATCH_STATUS_LABELS = {
-    "matched": "已命中旧规则",
-    "unmatched": "未命中旧规则",
+    "matched": "已通过触发检查",
+    "unmatched": "未通过触发检查",
 }
 UNMATCHED_REASON_LABELS = {
     "missing_question_mark": "没有问号",
@@ -839,6 +890,9 @@ def create_handler(state: WorkbenchApiState):
                 return
             if path == "/api/app/status":
                 self._send_json(state.get_app_status())
+                return
+            if path == "/api/app/readiness":
+                self._send_json(state.get_readiness())
                 return
             if path == "/api/app/settings":
                 self._send_json(state.get_app_settings())

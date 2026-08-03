@@ -259,6 +259,51 @@ class WorkbenchApiTest(unittest.TestCase):
         self.assertEqual(stopped["engine"]["status"], "idle")
         self.assertEqual(idle["engine"]["send_mode"], "manual_confirm")
 
+    def test_readiness_explains_each_required_service_without_remote_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_BASE_URL": "https://api.deepseek.com",
+                    "OPENAI_CHAT_MODEL": "deepseek-v4-pro",
+                },
+                clear=False,
+            ):
+                state = WorkbenchApiState(
+                    candidate_path=root / "candidates.jsonl",
+                    log_path=root / "logs.jsonl",
+                    wechat_config_path=root / "wechat_bridge_config.json",
+                )
+                state.app_running = True
+                state.wechat_listener_running = True
+                payload = state.get_readiness()
+
+        self.assertEqual(payload["operation_profile"], "safe_review")
+        self.assertEqual(
+            [item["key"] for item in payload["checks"]],
+            ["engine", "group", "ai", "wechat"],
+        )
+        self.assertTrue(payload["ready"])
+        self.assertTrue(all(item["ready"] for item in payload["checks"]))
+        self.assertEqual(payload["checks"][2]["detail"], "deepseek-v4-pro")
+
+    def test_readiness_reports_missing_ai_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict("os.environ", {}, clear=True):
+                state = WorkbenchApiState(
+                    candidate_path=root / "candidates.jsonl",
+                    log_path=root / "logs.jsonl",
+                )
+                payload = state.get_readiness()
+
+        ai_check = next(item for item in payload["checks"] if item["key"] == "ai")
+        self.assertFalse(payload["ready"])
+        self.assertFalse(ai_check["ready"])
+        self.assertIn("OPENAI_API_KEY", ai_check["detail"])
+
     def test_demo_items_cover_visible_mvp_states(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -483,6 +528,7 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
 
         self.assertEqual(item["review_status"], "pending_review")
         self.assertEqual(item["match_status"], "unmatched")
+        self.assertEqual(item["match_status_label"], "未通过触发检查")
         self.assertEqual(
             item["unmatched_reasons"],
             [
@@ -1289,6 +1335,38 @@ class WorkbenchWebWechatBridgeTest(unittest.TestCase):
             log_text = (root / "logs.jsonl").read_text(encoding="utf-8")
             self.assertIn("auto_sent_to_wechat", log_text)
             self.assertNotIn("operator_confirmed_sent", log_text)
+
+    def test_publish_reply_saves_operator_edited_reply_as_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_path = root / "candidates.jsonl"
+            state = WorkbenchApiState(
+                candidate_path=candidate_path,
+                log_path=root / "logs.jsonl",
+                wechat_config_path=root / "wechat_bridge_config.json",
+            )
+            state.configure_wechat(
+                {
+                    "group_name": "测试群",
+                    "keywords": ["报名"],
+                    "send_mode": "auto_send",
+                    "debug_review_mode": False,
+                }
+            )
+            state.paste_adapter = FakePasteAdapter()
+            item = state.ask("报名入口在哪里？")["item"]
+            edited_reply = f"{item['reply']} 请同时留意群公告。"
+
+            state.publish_reply(item["event_id"], edited_reply)
+
+            candidates = [
+                json.loads(line)
+                for line in candidate_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(candidates[-1]["edited_reply"], edited_reply)
+        self.assertEqual(candidates[-1]["candidate_type"], "operator_edit")
 
     def test_auto_send_marks_message_sent_even_when_reply_log_write_fails(self):
         class FailingLogStore:
