@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
   AppSettingsPayload,
-  AppSettingsUpdate,
   AppStatus,
-  DesktopApi,
   DesktopSettings,
   MessageScope,
+  OperationProfile,
   PasteReplyResult,
+  ReadinessPayload,
   ReviewStatus,
   VisionStatus,
   WeChatBridgeSettings,
@@ -15,9 +15,22 @@ import type {
   WorkTraceEntry,
   WorkTracePayload
 } from '../shared/types'
+import {
+  OPERATION_PROFILE_OPTIONS,
+  answerSourceLabel,
+  applyOperationProfile,
+  confidenceLabel,
+  confidenceLevel,
+  decisionSummary,
+  extractSafeSourceUrl,
+  filterWorkbenchItems,
+  operationProfileLabel,
+  recommendedPrimaryAction,
+  resolveOperationProfile
+} from './workbench-ux'
 
 const fallbackSettings: DesktopSettings = {
-  window: { width: 380, height: 680, min_width: 360, min_height: 560, settings_width: 900, settings_height: 720 },
+  window: { width: 1180, height: 760, min_width: 960, min_height: 680, settings_width: 900, settings_height: 720 },
   main_view: {
     show_target: true,
     show_recent_logs: true,
@@ -38,7 +51,7 @@ const fallbackStatus: AppStatus = {
     debug_review_mode: true
   },
   settings: fallbackSettings,
-  recent_logs: ['引擎尚未启动']
+  recent_logs: []
 }
 
 const fallbackWechatSettings: WeChatBridgeSettings = {
@@ -54,46 +67,38 @@ const fallbackWechatSettings: WeChatBridgeSettings = {
   debug_review_mode: true
 }
 
-type WechatForm = {
-  group_name: string
-  keywordsText: string
-  poll_interval_seconds: number
-  send_mode: string
-  debug_review_mode: boolean
-}
-
-function toWechatForm(wechat?: WeChatBridgeSettings): WechatForm {
-  const current = wechat ?? fallbackWechatSettings
-  return {
-    group_name: current.group_name,
-    keywordsText: current.keywords.join(', '),
-    poll_interval_seconds: current.poll_interval_seconds,
-    send_mode: current.send_mode || 'manual_confirm',
-    debug_review_mode: current.debug_review_mode ?? true
-  }
+const emptyReadiness: ReadinessPayload = {
+  ready: false,
+  operation_profile: 'safe_review',
+  checks: [
+    { key: 'engine', label: '本地服务', ready: false, detail: '正在检查' },
+    { key: 'group', label: '目标群聊', ready: false, detail: '正在检查' },
+    { key: 'ai', label: 'AI 配置', ready: false, detail: '正在检查' },
+    { key: 'wechat', label: '微信监听', ready: false, detail: '正在检查' }
+  ]
 }
 
 function App() {
   const params = new URLSearchParams(window.location.search)
   const windowKind = params.get('window') || 'main'
-  const page = params.get('page') || 'messages'
   const [status, setStatus] = useState<AppStatus>(fallbackStatus)
 
   useEffect(() => {
-    document.title = {
-      main: '夏令营 Agent',
-      settings: '设置 - 夏令营 Agent',
-      advanced: '高级工作台 - 夏令营 Agent'
-    }[windowKind] ?? '夏令营 Agent'
+    document.title = windowKind === 'settings'
+      ? '设置 - 夏令营 Agent'
+      : windowKind === 'advanced'
+        ? '工作轨迹 - 夏令营 Agent'
+        : '夏令营 Agent'
   }, [windowKind])
 
   useEffect(() => {
-    void refresh()
-    const timer = window.setInterval(refresh, 3000)
+    if (windowKind !== 'main') return
+    void refreshStatus()
+    const timer = window.setInterval(refreshStatus, 3000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [windowKind])
 
-  async function refresh() {
+  async function refreshStatus() {
     try {
       setStatus(await window.desktop.getStatus())
     } catch {
@@ -102,300 +107,280 @@ function App() {
   }
 
   if (windowKind === 'settings') return <SettingsWindow />
-  if (windowKind === 'advanced') return <AdvancedWindow page={page} />
-  return <DesktopWorkbench status={status} onRefresh={refresh} />
+  if (windowKind === 'advanced') return <WorkTracePage />
+  return <DesktopWorkbench status={status} onRefreshStatus={refreshStatus} />
 }
 
-function Controller({ status, onRefresh }: { status: AppStatus; onRefresh: () => Promise<void> }) {
-  const running = status.engine.status === 'running'
-  const view = status.settings.main_view
-
-  async function toggleEngine() {
-    if (running) {
-      await window.desktop.stop()
-    } else {
-      await window.desktop.start()
-    }
-    await onRefresh()
-  }
-
-  return (
-    <main className="controller-shell">
-      <header className="brand-row">
-        <div className="brand-mark" aria-hidden="true" />
-        <strong>夏令营 Agent</strong>
-      </header>
-
-      <section className="status-card" aria-live="polite">
-        <span className={`status-dot status-${status.engine.status}`} />
-        <div>
-          <h1>{status.engine.status === 'running' ? '运行中' : status.engine.status === 'error' ? '异常' : '待命'}</h1>
-          {view.show_status_detail && <p>{status.engine.listener_running ? '微信监听已开启' : '监听未开启'}</p>}
-        </div>
-      </section>
-
-      {view.show_target && (
-        <section className="panel">
-          <h2>目标群聊</h2>
-          <div className="select-like">{status.engine.group_name || '未连接'}</div>
-          <p className="hint"><span />WeFlow 本地服务</p>
-        </section>
-      )}
-
-      {view.show_recent_logs && (
-        <section className="panel log-panel">
-          <h2>运行日志</h2>
-          <div className="log-box">
-            {status.recent_logs.length ? status.recent_logs.slice(-6).map((line, index) => <p key={`${line}-${index}`}>{line}</p>) : <em>引擎尚未启动</em>}
-          </div>
-        </section>
-      )}
-
-      <footer className="bottom-bar">
-        <button className="primary-action" onClick={toggleEngine}>
-          <span aria-hidden="true">{running ? '■' : '▶'}</span>
-          {running ? '停止引擎' : '启动引擎'}
-        </button>
-        {view.show_history_entry && <IconButton label="历史" onClick={() => window.desktop.openAdvanced('work_trace')}>↺</IconButton>}
-        <IconButton label="配置" onClick={() => window.desktop.openSettings()}>⚙</IconButton>
-      </footer>
-    </main>
-  )
-}
-
-function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Promise<void> }) {
+function DesktopWorkbench({ status, onRefreshStatus }: { status: AppStatus; onRefreshStatus: () => Promise<void> }) {
   const [itemsPayload, setItemsPayload] = useState<WorkbenchItemsPayload>({ items: [] })
   const [selectedId, setSelectedId] = useState('')
   const [replyDraft, setReplyDraft] = useState('')
   const [reviewNote, setReviewNote] = useState('')
   const [manualQuestion, setManualQuestion] = useState('')
-  const [message, setMessage] = useState('桌面工作台已就绪')
   const [messageScope, setMessageScope] = useState<MessageScope>('pending')
   const [reviewStatusFilter, setReviewStatusFilter] = useState<ReviewStatus | ''>('')
+  const [queueSearch, setQueueSearch] = useState('')
   const [vision, setVision] = useState<VisionStatus>({ running: false, window_title: '', last_message: '', last_error: '' })
-  const selected = itemsPayload.items.find((item) => item.message_id === selectedId) ?? itemsPayload.items[0]
-  const selectedIsPending = selected?.review_status === 'pending_review'
+  const [readiness, setReadiness] = useState<ReadinessPayload>(emptyReadiness)
+  const [busyAction, setBusyAction] = useState('')
+  const [toast, setToast] = useState({ kind: 'info', text: '正在准备工作台…' })
+  const [pastedMessageId, setPastedMessageId] = useState('')
+
+  const visibleItems = useMemo(
+    () => filterWorkbenchItems(itemsPayload.items, queueSearch),
+    [itemsPayload.items, queueSearch]
+  )
+  const selected = visibleItems.find((item) => item.message_id === selectedId) ?? visibleItems[0]
+  const operationProfile = readiness.operation_profile || resolveOperationProfile({
+    send_mode: status.engine.send_mode,
+    debug_review_mode: status.engine.debug_review_mode
+  })
+  const primaryAction = recommendedPrimaryAction(operationProfile, selected, pastedMessageId === selected?.message_id)
+  const sourceUrl = selected ? extractSafeSourceUrl(selected.answer_source) : ''
 
   useEffect(() => {
-    void refreshItems()
-    void refreshVision()
+    void initialize()
   }, [])
 
   useEffect(() => {
-    if (selected) {
-      setReplyDraft(selected.reply || '')
-      setReviewNote(selected.review_note || '')
-    }
+    if (!selected) return
+    setSelectedId(selected.message_id)
+    setReplyDraft(selected.reply || '')
+    setReviewNote(selected.review_note || '')
+    setPastedMessageId('')
   }, [selected?.message_id])
 
   useEffect(() => {
     if (!vision.running) return
-    const timer = window.setInterval(refreshItems, Math.max(2000, status.engine.poll_interval_seconds * 1000))
+    const timer = window.setInterval(
+      () => void refreshItems(),
+      Math.max(2000, status.engine.poll_interval_seconds * 1000)
+    )
     return () => window.clearInterval(timer)
-  }, [vision.running, status.engine.poll_interval_seconds])
+  }, [vision.running, status.engine.poll_interval_seconds, messageScope, reviewStatusFilter])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault()
+        if (!busyAction) void runPrimaryAction()
+      }
+      if (event.altKey && event.key === 'ArrowDown' && visibleItems.length) {
+        event.preventDefault()
+        const currentIndex = Math.max(0, visibleItems.findIndex((item) => item.message_id === selected?.message_id))
+        setSelectedId(visibleItems[(currentIndex + 1) % visibleItems.length].message_id)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busyAction, primaryAction, selected?.message_id, replyDraft, reviewNote, visibleItems])
+
+  async function initialize() {
+    try {
+      await window.desktop.start()
+      const [items, nextVision, nextReadiness] = await Promise.all([
+        window.desktop.getItems('pending', ''),
+        window.desktop.getVisionStatus(),
+        window.desktop.getReadiness()
+      ])
+      setItemsPayload(items)
+      setSelectedId(items.items[0]?.message_id ?? '')
+      setVision(nextVision)
+      setReadiness(nextReadiness)
+      setToast({ kind: 'success', text: items.items.length ? `有 ${items.items.length} 条消息待处理` : '工作台已就绪' })
+      await onRefreshStatus()
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    }
+  }
+
+  async function refreshReadiness() {
+    try {
+      setReadiness(await window.desktop.getReadiness())
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    }
+  }
 
   async function refreshItems(
     nextScope: MessageScope = messageScope,
     nextReviewStatus: ReviewStatus | '' = reviewStatusFilter
   ) {
+    const payload = await window.desktop.getItems(nextScope, nextReviewStatus)
+    setItemsPayload(payload)
+    setSelectedId((current) => current && payload.items.some((item) => item.message_id === current)
+      ? current
+      : payload.items[0]?.message_id ?? '')
+    return payload
+  }
+
+  async function runAction(key: string, pendingText: string, action: () => Promise<string>) {
+    if (busyAction) return
+    setBusyAction(key)
+    setToast({ kind: 'info', text: pendingText })
     try {
-      const getItems = getDesktopMethod('getItems')
-      const payload = await getItems(nextScope, nextReviewStatus)
-      setItemsPayload(payload)
-      setSelectedId((current) => current && payload.items.some((item) => item.message_id === current) ? current : payload.items[0]?.message_id ?? '')
+      const result = await action()
+      setToast({ kind: 'success', text: result })
     } catch (error) {
-      setMessage(errorMessage(error))
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusyAction('')
     }
   }
 
   async function changeQueue(nextScope: MessageScope) {
     setMessageScope(nextScope)
-    const nextReviewStatus = nextScope === 'all' ? reviewStatusFilter : ''
-    await refreshItems(nextScope, nextReviewStatus)
+    const statusFilter = nextScope === 'all' ? reviewStatusFilter : ''
+    if (nextScope === 'pending') setReviewStatusFilter('')
+    await runAction('queue', '正在读取消息…', async () => {
+      const payload = await refreshItems(nextScope, statusFilter)
+      return payload.items.length ? `已载入 ${payload.items.length} 条消息` : '当前没有符合条件的消息'
+    })
   }
 
-  async function changeReviewStatus(nextReviewStatus: ReviewStatus | '') {
-    setReviewStatusFilter(nextReviewStatus)
-    await refreshItems('all', nextReviewStatus)
+  async function changeReviewStatus(nextStatus: ReviewStatus | '') {
+    setReviewStatusFilter(nextStatus)
+    await runAction('filter', '正在筛选历史记录…', async () => {
+      const payload = await refreshItems('all', nextStatus)
+      return payload.items.length ? `找到 ${payload.items.length} 条记录` : '没有符合条件的历史记录'
+    })
   }
 
-  async function refreshVision() {
-    try {
-      const getVisionStatus = getDesktopMethod('getVisionStatus')
-      setVision(await getVisionStatus())
-    } catch (error) {
-      setVision((current) => ({ ...current, last_error: errorMessage(error) }))
-    }
+  async function toggleObservation() {
+    await runAction('observation', vision.running ? '正在停止观察…' : '正在连接微信…', async () => {
+      const result = vision.running ? await window.desktop.stopVision() : await window.desktop.startVision()
+      setVision(result.vision)
+      setItemsPayload({ items: result.items })
+      setSelectedId(result.items[0]?.message_id ?? '')
+      await refreshReadiness()
+      await onRefreshStatus()
+      return result.message
+    })
+  }
+
+  async function syncNow() {
+    await runAction('sync', '正在同步当前窗口…', async () => {
+      const result = await window.desktop.captureVision()
+      setVision(result.vision)
+      setItemsPayload({ items: result.items })
+      setSelectedId(result.items[0]?.message_id ?? '')
+      return result.message
+    })
   }
 
   async function generateDraft() {
-    await runAction('正在生成草稿...', async () => {
-      const question = manualQuestion.trim()
-      if (!question) {
-        setMessage('请先输入学生问题')
-        return
-      }
-      const ask = getDesktopMethod('ask')
-      const payload = await ask(question)
+    const question = manualQuestion.trim()
+    if (!question) {
+      setToast({ kind: 'error', text: '请先输入学生问题' })
+      return
+    }
+    await runAction('generate', '正在结合 FAQ 和 RAG 生成草稿…', async () => {
+      const payload = await window.desktop.ask(question)
       setMessageScope('pending')
       setReviewStatusFilter('')
       setItemsPayload({ items: payload.items })
       setSelectedId(payload.item.message_id)
       setManualQuestion('')
-      setMessage('已生成回复草稿')
+      return '草稿已生成并加入待处理队列'
     })
   }
 
   async function pasteReply() {
-    await runAction('正在填入微信...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      const pasteReply = getDesktopMethod('pasteReply')
-      const result = await pasteReply(selected.event_id, replyDraft)
-      setMessage(pasteStatusMessage(result))
+    if (!selected) return
+    await runAction('paste', '正在填入微信…', async () => {
+      const result = await window.desktop.pasteReply(selected.event_id, replyDraft)
+      setPastedMessageId(selected.message_id)
+      return pasteStatusMessage(result)
     })
   }
 
   async function publishReply() {
-    await runAction('正在自动发布...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      if (status.engine.send_mode !== 'auto_send') {
-        setMessage('请先在配置中选择系统自动发送')
-        return
-      }
-      const publishReply = getDesktopMethod('publishReply')
-      const result = await publishReply(selected.event_id, replyDraft)
+    if (!selected) return
+    await runAction('publish', '正在发送回复…', async () => {
+      const result = await window.desktop.publishReply(selected.event_id, replyDraft)
       await refreshItems()
-      setMessage(pasteStatusMessage(result))
+      return pasteStatusMessage(result)
     })
   }
 
   async function confirmSent() {
-    await runAction('正在记录已发送...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      const confirmSent = getDesktopMethod('confirmSent')
-      const result = await confirmSent(selected.event_id, replyDraft)
+    if (!selected) return
+    await runAction('confirm', '正在记录发送结果…', async () => {
+      const result = await window.desktop.confirmSent(selected.event_id, replyDraft)
       await refreshItems()
-      setMessage(result.message)
+      return replyDraft.trim() !== selected.reply.trim()
+        ? `${result.message}；修改后的回复已沉淀为候选`
+        : result.message
     })
   }
 
   async function saveCandidate() {
-    await runAction('正在保存候选...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      const saveCandidate = getDesktopMethod('saveCandidate')
-      const result = await saveCandidate(selected.event_id, replyDraft)
+    if (!selected) return
+    await runAction('candidate', '正在保存候选…', async () => {
+      const result = await window.desktop.saveCandidate(selected.event_id, replyDraft)
       await refreshItems()
-      setMessage(result.message)
+      return result.message
     })
   }
 
   async function escalateMessage() {
-    await runAction('正在转人工处理...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      const escalateMessage = getDesktopMethod('escalateMessage')
-      const result = await escalateMessage(selected.message_id, reviewNote)
+    if (!selected) return
+    await runAction('escalate', '正在转人工处理…', async () => {
+      const result = await window.desktop.escalateMessage(selected.event_id, reviewNote)
       await refreshItems()
-      setMessage(result.message)
+      return result.message
     })
   }
 
   async function completeReview() {
-    await runAction('正在完成审核...', async () => {
-      if (!selected) {
-        setMessage('请先选择一条消息')
-        return
-      }
-      const completeReview = getDesktopMethod('completeReview')
-      const result = await completeReview(selected.message_id, reviewNote)
+    if (!selected) return
+    await runAction('complete', '正在完成审核…', async () => {
+      const result = await window.desktop.completeReview(selected.event_id, reviewNote)
       await refreshItems()
-      setMessage(result.message)
+      return result.message
     })
   }
 
-  async function startVision() {
-    await runAction('正在启动视觉观察...', async () => {
-      const startVision = getDesktopMethod('startVision')
-      const payload = await startVision()
-      setMessageScope('pending')
-      setReviewStatusFilter('')
-      setItemsPayload({ items: payload.items })
-      setVision(payload.vision)
-      setMessage(payload.message)
-    })
+  async function runPrimaryAction() {
+    if (primaryAction === 'paste') await pasteReply()
+    else if (primaryAction === 'confirm_sent') await confirmSent()
+    else if (primaryAction === 'escalate') await escalateMessage()
   }
 
-  async function captureVision() {
-    await runAction('正在识别当前窗口...', async () => {
-      const captureVision = getDesktopMethod('captureVision')
-      const payload = await captureVision()
-      setMessageScope('pending')
-      setReviewStatusFilter('')
-      setItemsPayload({ items: payload.items })
-      setVision(payload.vision)
-      setMessage(payload.message)
-    })
-  }
-
-  async function stopVision() {
-    await runAction('正在停止观察...', async () => {
-      const stopVision = getDesktopMethod('stopVision')
-      const payload = await stopVision()
-      setVision(payload.vision)
-      setMessage(payload.message)
-    })
-  }
-
-  async function runAction(pendingMessage: string, action: () => Promise<void>) {
-    setMessage(pendingMessage)
-    try {
-      await action()
-    } catch (error) {
-      setMessage(errorMessage(error))
-    }
-  }
+  const primaryLabel = primaryAction === 'paste'
+    ? operationProfile === 'safe_review' ? '确认回复并填入微信' : '填入微信'
+    : primaryAction === 'confirm_sent'
+      ? '我已发送'
+      : primaryAction === 'escalate'
+        ? '转人工处理'
+        : '请选择待处理消息'
 
   return (
     <main className="workbench-shell">
       <aside className="workbench-sidebar">
         <header className="brand-row">
-          <div className="brand-mark" aria-hidden="true" />
-          <div>
-            <strong>夏令营 Agent</strong>
-            <span>微信回复助手</span>
-          </div>
+          <span className="brand-mark" aria-hidden="true">夏</span>
+          <div><strong>夏令营 Agent</strong><small>微信回复工作台</small></div>
         </header>
-        <section className="sidebar-status" aria-label="微信观察状态">
+
+        <section className="sidebar-status">
           <span className={`status-dot ${vision.running ? 'status-running' : 'status-idle'}`} />
           <div>
-            <strong>{vision.running ? '正在观察微信' : '等待观察'}</strong>
-            <small>{vision.window_title || status.engine.group_name || '尚未连接窗口'}</small>
+            <strong>{vision.running ? '正在观察微信' : '尚未观察微信'}</strong>
+            <small>{vision.window_title || status.engine.group_name || '等待连接窗口'}</small>
           </div>
         </section>
-        <section className="sidebar-guide" aria-label="处理流程">
-          <h2>处理流程</h2>
-          <ol>
-            <li><span>1</span>观察微信消息</li>
-            <li><span>2</span>选择待回复问题</li>
-            <li><span>3</span>确认草稿并发送</li>
-          </ol>
+
+        <ReadinessCard readiness={readiness} onRefresh={() => void refreshReadiness()} />
+
+        <section className="mode-summary">
+          <span>运行模式</span>
+          <strong>{operationProfileLabel(operationProfile)}</strong>
+          <small>{OPERATION_PROFILE_OPTIONS.find((option) => option.value === operationProfile)?.description}</small>
         </section>
+
         <nav className="sidebar-links" aria-label="辅助入口">
-          <button className="ghost-action" type="button" onClick={() => window.desktop.openSettings()}>配置</button>
+          <button className="ghost-action" type="button" onClick={() => window.desktop.openSettings()}>设置</button>
           <button className="ghost-action" type="button" onClick={() => window.desktop.openAdvanced('work_trace')}>工作轨迹</button>
         </nav>
       </aside>
@@ -403,513 +388,319 @@ function DesktopWorkbench({ status }: { status: AppStatus; onRefresh: () => Prom
       <section className="workflow-panel">
         <header className="workflow-header">
           <div>
-            <span className="eyebrow">第 1 步</span>
-            <h1>观察并获取待回复消息</h1>
-            <p>{vision.last_error || vision.last_message || message}</p>
+            <span className="eyebrow">消息处理</span>
+            <h1>{vision.running ? '正在接收微信消息' : '连接微信后开始处理'}</h1>
+            <p>{vision.last_error || vision.last_message || '命中 FAQ 或 RAG 的消息将按当前模式处理。'}</p>
           </div>
           <div className="workflow-actions">
-            <button className="primary-action compact" type="button" onClick={startVision}>启动观察</button>
-            <button className="ghost-action compact" type="button" onClick={captureVision}>识别当前窗口</button>
-            <button className="ghost-action compact" type="button" onClick={() => refreshItems()}>刷新</button>
-            {vision.running && <button className="ghost-action compact" type="button" onClick={stopVision}>停止</button>}
+            <button className={vision.running ? 'danger-action' : 'primary-action compact'} type="button" disabled={Boolean(busyAction)} onClick={() => void toggleObservation()}>
+              {busyAction === 'observation' ? '处理中…' : vision.running ? '停止观察' : '开始观察'}
+            </button>
+            <details className="header-more">
+              <summary aria-label="观察更多操作">•••</summary>
+              <button type="button" disabled={Boolean(busyAction)} onClick={() => void syncNow()}>立即同步</button>
+            </details>
           </div>
         </header>
 
-        <section className="manual-entry" aria-label="手动生成回复">
-          <input
-            value={manualQuestion}
-            onChange={(event) => setManualQuestion(event.target.value)}
-            placeholder="也可以手动输入学生问题，生成一条回复草稿"
-          />
-          <button className="secondary-action compact" type="button" onClick={generateDraft}>生成草稿</button>
-        </section>
+        <div className={`toast toast-${toast.kind}`} role="status" aria-live="polite">{toast.text}</div>
 
-        {status.engine.debug_review_mode && (
-          <div className="diagnostic-banner" role="status">
-            <strong>调试审核模式已开启</strong>
-            <span>所有文本消息都会进入待审核，系统不会自动发送。</span>
+        <details className="manual-tools">
+          <summary>手动测试一个问题</summary>
+          <div className="manual-entry">
+            <input value={manualQuestion} onChange={(event) => setManualQuestion(event.target.value)} placeholder="输入学生问题，验证 FAQ、RAG 与 AI 回复" />
+            <button className="secondary-action compact" type="button" disabled={Boolean(busyAction)} onClick={() => void generateDraft()}>生成草稿</button>
           </div>
-        )}
+        </details>
 
-        <section className="message-stream" aria-label="待处理消息">
-          <div className="message-stream-head">
-            <header>
-              <div>
-                <span className="eyebrow">第 2 步</span>
-                <h2>{messageScope === 'pending' ? '选择待处理消息' : '查看历史记录'}</h2>
-              </div>
-              <div className="queue-toolbar">
-                <div className="queue-tabs" role="tablist" aria-label="消息队列">
-                  <button
-                    role="tab"
-                    aria-selected={messageScope === 'pending'}
-                    className={messageScope === 'pending' ? 'active' : ''}
-                    type="button"
-                    onClick={() => changeQueue('pending')}
-                  >
-                    待审核
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={messageScope === 'all'}
-                    className={messageScope === 'all' ? 'active' : ''}
-                    type="button"
-                    onClick={() => changeQueue('all')}
-                  >
-                    历史记录
-                  </button>
-                </div>
-                <strong>{itemsPayload.items.length} 条</strong>
-              </div>
-            </header>
-            {messageScope === 'all' && (
-              <label className="history-filter" htmlFor="reviewStatusFilter">
-                <span>处理状态</span>
-                <select
-                  id="reviewStatusFilter"
-                  value={reviewStatusFilter}
-                  onChange={(event) => changeReviewStatus(event.target.value as ReviewStatus | '')}
-                >
-                  <option value="">全部状态</option>
-                  <option value="sent">已发送</option>
-                  <option value="escalated">已转人工</option>
-                  <option value="candidate_saved">已存候选</option>
-                  <option value="review_completed">审核完成</option>
-                </select>
-              </label>
-            )}
-          </div>
-          <div className="message-list">
-            {itemsPayload.items.length ? (
-              itemsPayload.items.map((item) => (
-                <button
-                  key={item.message_id}
-                  className={`message-row ${selected?.message_id === item.message_id ? 'selected' : ''}`}
-                  type="button"
-                  onClick={() => setSelectedId(item.message_id)}
-                >
-                  <span className="message-state">{item.review_status_label}</span>
-                  <strong>{item.question}</strong>
-                  <small>
-                    {item.sender} · {item.match_status === 'matched' ? '已命中旧规则' : '未命中旧规则'}
-                  </small>
-                </button>
-              ))
-            ) : (
-              <div className="empty-message-state" role="status">
-                <strong>{messageScope === 'pending' ? '暂无待处理消息' : '暂无历史记录'}</strong>
-                <span>
-                  {messageScope === 'pending'
-                    ? '点击“启动观察”监听微信，或在上方手动输入问题生成草稿。'
-                    : '消息完成审核后会保留在这里。'}
-                </span>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="reply-composer" aria-label="回复草稿">
-          <div className="composer-head">
-            <div>
-              <span className="eyebrow">第 3 步</span>
-              <label htmlFor="replyDraft">确认回复草稿</label>
+        <section className="message-stream">
+          <header className="message-stream-head">
+            <div className="queue-title"><h2>{messageScope === 'pending' ? '待处理' : '历史记录'}</h2><span>{visibleItems.length}</span></div>
+            <div className="queue-tabs" role="tablist" aria-label="消息范围">
+              <button className={messageScope === 'pending' ? 'active' : ''} type="button" onClick={() => void changeQueue('pending')}>待处理</button>
+              <button className={messageScope === 'all' ? 'active' : ''} type="button" onClick={() => void changeQueue('all')}>历史记录</button>
             </div>
-            <p role="status">{message}</p>
+          </header>
+          <div className="queue-toolbar">
+            <input className="queue-search" type="search" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="搜索消息、发送人或回复" aria-label="搜索消息" />
+            {messageScope === 'all' && (
+              <select value={reviewStatusFilter} onChange={(event) => void changeReviewStatus(event.target.value as ReviewStatus | '')} aria-label="历史状态">
+                <option value="">全部状态</option>
+                <option value="sent">已发送</option>
+                <option value="escalated">已转人工</option>
+                <option value="candidate_saved">已存候选</option>
+                <option value="review_completed">审核完成</option>
+              </select>
+            )}
           </div>
-          <textarea
-            id="replyDraft"
-            value={replyDraft}
-            disabled={!selectedIsPending}
-            onChange={(event) => setReplyDraft(event.target.value)}
-          />
-          {selectedIsPending ? (
-            <>
-              <label className="review-note" htmlFor="reviewNote">
-                <span>处理备注（可选）</span>
-                <input
-                  id="reviewNote"
-                  value={reviewNote}
-                  onChange={(event) => setReviewNote(event.target.value)}
-                  placeholder="例如：需老师确认录取结果"
-                />
-              </label>
-              <div className="reply-actions">
-                <button className="primary-action compact" type="button" onClick={pasteReply}>填入微信</button>
-                {!status.engine.debug_review_mode && (
-                  <button className="secondary-action compact" type="button" onClick={publishReply}>自动发布</button>
-                )}
-                <button className="secondary-action compact" type="button" onClick={confirmSent}>我已发送</button>
-                <button className="ghost-action compact" type="button" onClick={saveCandidate}>保存候选</button>
-                <button className="ghost-action compact" type="button" onClick={escalateMessage}>转人工</button>
-                <button className="ghost-action compact" type="button" onClick={completeReview}>完成审核</button>
+          <div className="message-list" role="list">
+            {visibleItems.length ? visibleItems.map((item) => (
+              <button className={`message-row ${selected?.message_id === item.message_id ? 'selected' : ''}`} type="button" role="listitem" key={item.message_id} onClick={() => setSelectedId(item.message_id)}>
+                <div className="message-row-top">
+                  <strong>{item.sender}</strong>
+                  <time>{formatDate(item.message_time || item.created_at)}</time>
+                </div>
+                <span className="message-question">{item.question}</span>
+                <div className="message-meta">
+                  <span>{item.review_status_label}</span>
+                  <span>{answerSourceLabel(item)}</span>
+                  <span className={`confidence confidence-${confidenceLevel(item.confidence)}`}>置信度 {confidenceLabel(item.confidence)}</span>
+                </div>
+              </button>
+            )) : (
+              <div className="empty-message-state" role="status">
+                <strong>{queueSearch ? '没有搜索结果' : messageScope === 'pending' ? '暂无待处理消息' : '暂无历史记录'}</strong>
+                <span>{queueSearch ? '换一个关键词试试。' : vision.running ? '新消息到达后会自动出现在这里。' : '开始观察微信，或使用上方手动测试。'}</span>
               </div>
-            </>
-          ) : (
-            <p className="history-readonly">历史消息为只读状态；处理结果和时间可在右侧查看。</p>
+            )}
+          </div>
+        </section>
+
+        <section className="reply-composer">
+          <header className="composer-head">
+            <div><span className="eyebrow">回复草稿</span><h2>{selected ? selected.question : '请选择一条消息'}</h2></div>
+            <small>Ctrl+Enter 执行推荐操作 · Alt+↓ 下一条</small>
+          </header>
+          <textarea value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} disabled={!selected || selected.review_status !== 'pending_review'} placeholder="系统生成的回复会显示在这里" aria-label="回复草稿" />
+          {selected?.review_status === 'pending_review' && (
+            <label className="review-note"><span>处理备注</span><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="可选，例如：需要老师确认录取结果" /></label>
           )}
+          <div className="reply-actions">
+            <button className="primary-action compact" type="button" disabled={Boolean(busyAction) || primaryAction === 'none' || !replyDraft.trim()} onClick={() => void runPrimaryAction()}>
+              {busyAction && ['paste', 'confirm', 'escalate'].includes(busyAction) ? '处理中…' : primaryLabel}
+            </button>
+            {selected?.review_status === 'pending_review' && (
+              <details className="more-actions">
+                <summary>更多操作</summary>
+                <div>
+                  {operationProfile === 'automatic' && <button type="button" onClick={() => void publishReply()}>直接发送</button>}
+                  <button type="button" onClick={() => void saveCandidate()}>保存为候选</button>
+                  {primaryAction !== 'escalate' && <button type="button" onClick={() => void escalateMessage()}>转人工处理</button>}
+                  <button type="button" onClick={() => void completeReview()}>无需回复，完成审核</button>
+                </div>
+              </details>
+            )}
+          </div>
         </section>
       </section>
 
       <aside className="decision-panel">
-        <header>
-          <span className="eyebrow">辅助判断</span>
-          <h2>选中消息详情</h2>
-        </header>
-        {selected ? <DecisionSummary item={selected} /> : <p>选择一条消息后，这里会显示触发原因、建议动作和置信度。</p>}
+        <header><span className="eyebrow">回复依据</span><h2>{selected ? '系统为什么这样建议' : '选择消息查看依据'}</h2></header>
+        {selected ? (
+          <>
+            <section className="decision-summary">
+              <DecisionLine label="建议" value={selected.recommendation || '人工检查回复'} />
+              <DecisionLine label="来源" value={answerSourceLabel(selected)} />
+              <DecisionLine label="置信度" value={`${confidenceLabel(selected.confidence)}（${selected.confidence.toFixed(2)}）`} />
+              <p>{decisionSummary(selected)}</p>
+            </section>
+            <section className="source-preview">
+              <span>资料来源</span>
+              <p>{selected.answer_source || '未找到明确资料来源'}</p>
+              {sourceUrl && <button type="button" onClick={() => window.desktop.openExternal(sourceUrl)}>打开来源</button>}
+            </section>
+            {selected.match_status === 'unmatched' && selected.unmatched_reason_labels.length > 0 && (
+              <section className="trigger-note"><strong>触发检查</strong><p>{selected.unmatched_reason_labels.join('、')}</p></section>
+            )}
+            <details className="technical-details">
+              <summary>技术详情</summary>
+              <dl className="decision-grid">
+                <DecisionLine label="综合" value={selected.confidence.toFixed(2)} />
+                <DecisionLine label="语义" value={selected.semantic_confidence.toFixed(2)} />
+                <DecisionLine label="FAQ" value={selected.faq_confidence.toFixed(2)} />
+                <DecisionLine label="RAG" value={selected.rag_confidence.toFixed(2)} />
+                <DecisionLine label="生成方式" value={selected.generation_mode || '规则回复'} />
+                <DecisionLine label="生成模型" value={selected.generation_model || '未使用模型'} />
+                <DecisionLine label="原因" value={selected.reason || '无'} />
+                {selected.generation_error && <DecisionLine label="降级信息" value={selected.generation_error} />}
+              </dl>
+            </details>
+          </>
+        ) : <p className="decision-empty">从中间队列中选择一条消息。</p>}
       </aside>
     </main>
   )
 }
 
-function getDesktopMethod<K extends keyof DesktopApi>(name: K): DesktopApi[K] {
-  const api = window.desktop as Partial<DesktopApi> | undefined
-  const method = api?.[name]
-  if (typeof method !== 'function') {
-    throw new Error(`桌面主进程尚未加载 ${String(name)} 接口，请完全退出并重新启动桌面版。`)
-  }
-  return method.bind(api) as DesktopApi[K]
-}
-
-function pasteStatusMessage(result: PasteReplyResult) {
-  if (result.paste_action === 'sent_verified') return '已自动发布到微信'
-  if (result.paste_action === 'sent_unverified') return '已自动发布到微信，但未能自动校验输入框内容'
-  if (result.paste_action === 'filled_verified') return '已填入并校验，请在微信中检查后手动发送'
-  if (result.paste_action === 'filled_unverified') return '已填入但无法自动校验，请人工检查'
-  if (result.target_status === 'not_found') return '未找到目标微信群，已复制到剪贴板'
-  if (result.input_status === 'not_empty') return '输入框已有内容，未覆盖'
-  return result.message
-}
-
-function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message
-  if (typeof error === 'string') return error
-  return '操作失败，请查看本地服务日志。'
-}
-
-function DecisionSummary({ item }: { item: WorkbenchItem }) {
+function ReadinessCard({ readiness, onRefresh }: { readiness: ReadinessPayload; onRefresh: () => void }) {
   return (
-    <dl className="decision-grid">
-      <DetailRow label="消息主键" value={item.message_id} />
-      <DetailRow label="审核状态" value={item.review_status_label} />
-      <DetailRow
-        label="旧规则"
-        value={item.match_status === 'matched' ? '已命中旧规则' : '未命中旧规则'}
-      />
-      {item.match_status === 'unmatched' && (
-        <DetailRow
-          label="未命中原因"
-          value={item.unmatched_reason_labels.join('；') || '规则未返回原因'}
-        />
-      )}
-      <DetailRow label="触发原因" value={item.trigger_reasons.join(', ') || '未触发'} />
-      <DetailRow label="命中关键词" value={item.matched_keywords.join(', ') || '无'} />
-      <DetailRow label="建议动作" value={item.recommendation || '无'} />
-      <DetailRow label="处理模式" value={item.mode || '无'} />
-      <DetailRow label="来源" value={item.answer_source || '无'} />
-      <DetailRow label="综合置信度" value={Number(item.confidence || 0).toFixed(2)} />
-      <DetailRow label="AI 语义状态" value={item.semantic_status || '未启用'} />
-      <DetailRow label="AI 识别意图" value={item.semantic_intent || '无'} />
-      <DetailRow label="AI 标准问题" value={item.semantic_question || '无'} />
-      <DetailRow label="AI 语义置信度" value={Number(item.semantic_confidence || 0).toFixed(2)} />
-      <DetailRow label="FAQ 匹配分" value={Number(item.faq_confidence || 0).toFixed(2)} />
-      <DetailRow label="RAG 词面匹配分" value={Number(item.rag_confidence || 0).toFixed(2)} />
-      {item.rag_query && <DetailRow label="RAG 检索问题" value={item.rag_query} />}
-      {item.semantic_model && <DetailRow label="AI 语义模型" value={item.semantic_model} />}
-      {item.semantic_error && <DetailRow label="AI 语义降级原因" value={item.semantic_error} />}
-      <DetailRow label="生成方式" value={item.generation_mode || '无'} />
-      <DetailRow label="生成模型" value={item.generation_model || '无'} />
-      {item.generation_error && <DetailRow label="生成降级原因" value={item.generation_error} />}
-      <DetailRow label="原因" value={item.reason || '无'} />
-      {item.review_note && <DetailRow label="处理备注" value={item.review_note} />}
-      {item.completed_at && <DetailRow label="处理时间" value={formatTime(item.completed_at)} />}
-    </dl>
+    <section className="readiness-card">
+      <header><h2>运行检查</h2><button type="button" onClick={onRefresh}>刷新</button></header>
+      <ul>
+        {readiness.checks.map((check) => (
+          <li key={check.key}>
+            <span className={`check-mark ${check.ready ? 'ready' : ''}`}>{check.ready ? '✓' : '!'}</span>
+            <div><strong>{check.label}</strong><small>{check.detail}</small></div>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
 function SettingsWindow() {
   const [payload, setPayload] = useState<AppSettingsPayload | null>(null)
-  const [wechatForm, setWechatForm] = useState<WechatForm>(() => toWechatForm())
-  const [wechatMessage, setWechatMessage] = useState('')
-  const settings = payload?.settings ?? fallbackSettings
-  const wechat = payload?.wechat ?? fallbackWechatSettings
+  const [wechat, setWechat] = useState<WeChatBridgeSettings>(fallbackWechatSettings)
+  const [operationProfile, setOperationProfile] = useState<OperationProfile>('safe_review')
+  const [keywordsText, setKeywordsText] = useState(fallbackWechatSettings.keywords.join('、'))
+  const [readiness, setReadiness] = useState<ReadinessPayload>(emptyReadiness)
+  const [message, setMessage] = useState('正在读取设置…')
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    void window.desktop.getSettings().then((nextPayload) => {
-      setPayload(nextPayload)
-      setWechatForm(toWechatForm(nextPayload.wechat))
-    })
-  }, [])
+  useEffect(() => { void load() }, [])
 
-  async function save(next: AppSettingsUpdate) {
-    const merged = { ...settings, ...next }
-    setPayload(await window.desktop.saveSettings(merged))
+  async function load() {
+    try {
+      const [settings, checks] = await Promise.all([window.desktop.getSettings(), window.desktop.getReadiness()])
+      setPayload(settings)
+      setWechat(settings.wechat)
+      setOperationProfile(resolveOperationProfile(settings.wechat))
+      setKeywordsText(settings.wechat.keywords.join('、'))
+      setReadiness(checks)
+      setMessage('设置已载入')
+    } catch (error) {
+      setMessage(errorMessage(error))
+    }
   }
 
-  async function saveWechatSettings() {
-    const groupName = wechatForm.group_name.trim()
-    const keywords = wechatForm.keywordsText.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean)
-    const pollSeconds = Math.min(60, Math.max(2, Number(wechatForm.poll_interval_seconds) || 5))
-    if (!groupName) {
-      setWechatMessage('请填写群聊名称')
-      return
+  async function saveSettings() {
+    if (!payload || saving) return
+    setSaving(true)
+    setMessage('正在保存设置…')
+    try {
+      const profiled = applyOperationProfile(wechat, operationProfile)
+      const saved = await window.desktop.saveSettings({
+        wechat: {
+          ...profiled,
+          group_name: wechat.group_name.trim(),
+          keywords: keywordsText.split(/[，,、\n]/).map((value) => value.trim()).filter(Boolean),
+          poll_interval_seconds: Math.max(2, Number(wechat.poll_interval_seconds) || 5)
+        }
+      })
+      setPayload(saved)
+      setWechat(saved.wechat)
+      setOperationProfile(resolveOperationProfile(saved.wechat))
+      setReadiness(await window.desktop.getReadiness())
+      setMessage('设置已保存，新模式已生效')
+    } catch (error) {
+      setMessage(errorMessage(error))
+    } finally {
+      setSaving(false)
     }
-    const nextPayload = await window.desktop.saveSettings({
-      ...settings,
-      wechat: {
-        ...wechat,
-        group_name: groupName,
-        keywords,
-        poll_interval_seconds: pollSeconds,
-        send_mode: wechatForm.send_mode,
-        debug_review_mode: wechatForm.debug_review_mode
-      }
-    })
-    setPayload(nextPayload)
-    setWechatForm(toWechatForm(nextPayload.wechat))
-    setWechatMessage('微信桥接配置已保存')
   }
 
   return (
     <main className="settings-shell">
-      <header>
-        <h1>配置</h1>
-        <p>控制主页面展示、回复模式和高级页面入口。</p>
-      </header>
-      <section className="settings-grid">
-        <SettingsPanel title="主页面展示">
-          <Toggle label="目标群聊" checked={settings.main_view.show_target} onChange={(value) => save({ main_view: { ...settings.main_view, show_target: value } })} />
-          <Toggle label="最近日志" checked={settings.main_view.show_recent_logs} onChange={(value) => save({ main_view: { ...settings.main_view, show_recent_logs: value } })} />
-          <Toggle label="历史入口" checked={settings.main_view.show_history_entry} onChange={(value) => save({ main_view: { ...settings.main_view, show_history_entry: value } })} />
-          <Toggle label="状态详情" checked={settings.main_view.show_status_detail} onChange={(value) => save({ main_view: { ...settings.main_view, show_status_detail: value } })} />
-        </SettingsPanel>
-        <SettingsPanel title="高级页面">
-          <Toggle label="消息处理" checked={settings.advanced_pages.messages} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, messages: value } })} />
-          <Toggle label="候选库" checked={settings.advanced_pages.candidates} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, candidates: value } })} />
-          <Toggle label="工作轨迹" checked={settings.advanced_pages.work_trace} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, work_trace: value } })} />
-          <Toggle label="RAG 维护" checked={settings.advanced_pages.rag} onChange={(value) => save({ advanced_pages: { ...settings.advanced_pages, rag: value } })} />
-        </SettingsPanel>
-        <SettingsPanel title="微信桥接">
-          <Field label="群聊" htmlFor="wechatGroupName">
-            <input
-              id="wechatGroupName"
-              value={wechatForm.group_name}
-              onChange={(event) => setWechatForm((current) => ({ ...current, group_name: event.target.value }))}
-            />
-          </Field>
-          <Field label="监听关键字" htmlFor="wechatKeywords">
-            <textarea
-              id="wechatKeywords"
-              rows={3}
-              value={wechatForm.keywordsText}
-              onChange={(event) => setWechatForm((current) => ({ ...current, keywordsText: event.target.value }))}
-            />
-          </Field>
-          <Field label="轮询时间" htmlFor="wechatPollSeconds">
-            <div className="input-with-unit">
-              <input
-                id="wechatPollSeconds"
-                type="number"
-                min={2}
-                max={60}
-                value={wechatForm.poll_interval_seconds}
-                onChange={(event) => setWechatForm((current) => ({ ...current, poll_interval_seconds: Number(event.target.value) }))}
-              />
-              <span>秒</span>
-            </div>
-          </Field>
-          <Field label="发送方式" htmlFor="wechatSendMode">
-            <select
-              id="wechatSendMode"
-              value={wechatForm.send_mode}
-              onChange={(event) => setWechatForm((current) => ({ ...current, send_mode: event.target.value }))}
-            >
-              <option value="manual_confirm">人工确认发送</option>
-              <option value="auto_send">系统自动发送</option>
-            </select>
-          </Field>
-          <Toggle
-            label="调试审核模式"
-            checked={wechatForm.debug_review_mode}
-            onChange={(value) => setWechatForm((current) => ({ ...current, debug_review_mode: value }))}
-          />
-          <ReadOnlyLine label="接口" value={String(payload?.wechat.base_url ?? 'http://127.0.0.1:5031')} />
-          <button className="secondary-action" type="button" onClick={saveWechatSettings}>保存微信桥接</button>
-          {wechatMessage && <p className="save-message" role="status">{wechatMessage}</p>}
-        </SettingsPanel>
-        <SettingsPanel title="回复模式">
-          <ReadOnlyLine label="模式" value={String(payload?.reply.mode ?? 'semi_auto')} />
-          <ReadOnlyLine label="每日上限" value={String(payload?.reply.daily_auto_reply_limit ?? 50)} />
-        </SettingsPanel>
-      </section>
+      <header className="settings-header"><div><span className="eyebrow">配置</span><h1>设置</h1><p>选择目标群和运行模式即可开始；低频参数放在高级区域。</p></div></header>
+      <div className="settings-grid simplified-settings">
+        <section className="settings-panel">
+          <h2>基础设置</h2>
+          <label className="field-stack"><span>目标微信群</span><input value={wechat.group_name} onChange={(event) => setWechat({ ...wechat, group_name: event.target.value })} placeholder="输入完整群聊名称" /></label>
+          <fieldset className="profile-options">
+            <legend>运行模式</legend>
+            {OPERATION_PROFILE_OPTIONS.map((option) => (
+              <label className={operationProfile === option.value ? 'selected' : ''} key={option.value}>
+                <input type="radio" name="operationProfile" value={option.value} checked={operationProfile === option.value} onChange={() => setOperationProfile(option.value)} />
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </label>
+            ))}
+          </fieldset>
+          <button className="primary-action settings-save" type="button" disabled={saving || !payload} onClick={() => void saveSettings()}>{saving ? '保存中…' : '保存设置'}</button>
+          <p className="save-message" aria-live="polite">{message}</p>
+        </section>
+
+        <div className="settings-side">
+          <ReadinessCard readiness={readiness} onRefresh={() => void load()} />
+          <details className="settings-panel advanced-settings">
+            <summary>高级参数</summary>
+            <label className="field-stack"><span>监听关键词</span><textarea value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} rows={4} /></label>
+            <label className="field-stack"><span>轮询间隔（秒）</span><input type="number" min="2" value={wechat.poll_interval_seconds} onChange={(event) => setWechat({ ...wechat, poll_interval_seconds: Number(event.target.value) })} /></label>
+            <div className="readonly-line"><span>WeFlow 地址</span><strong>{wechat.base_url}</strong></div>
+            <div className="readonly-line"><span>回复策略</span><strong>FAQ 或 RAG 任一命中即可回复</strong></div>
+          </details>
+        </div>
+      </div>
     </main>
   )
 }
 
-function AdvancedWindow({ page }: { page: string }) {
-  const title = useMemo(() => {
-    return ({ messages: '消息处理', candidates: '候选库', work_trace: '工作轨迹', rag: 'RAG 维护' } as Record<string, string>)[page] ?? '消息处理'
-  }, [page])
-  if (page === 'work_trace') return <WorkTracePage title={title} />
-  return (
-    <main className="advanced-shell">
-      <header>
-        <h1>{title}</h1>
-        <p>高级页面用于查看候选审核、资料维护和轨迹回放等辅助模块。</p>
-      </header>
-      <section className="empty-state">
-        <strong>{title}</strong>
-        <span>页面骨架已就绪，后续接入消息列表、候选审核和轨迹回放。</span>
-      </section>
-    </main>
-  )
-}
-
-function WorkTracePage({ title }: { title: string }) {
+function WorkTracePage() {
   const [payload, setPayload] = useState<WorkTracePayload | null>(null)
   const [selectedId, setSelectedId] = useState('')
-  const [message, setMessage] = useState('正在读取工作轨迹...')
-  const trace = payload?.trace ?? []
-  const selected = trace.find((entry) => entry.trace_id === selectedId) ?? trace[0]
+  const [message, setMessage] = useState('正在读取工作轨迹…')
+  const selected = payload?.trace.find((entry) => entry.trace_id === selectedId) ?? payload?.trace[0]
 
-  useEffect(() => {
-    void refreshTrace()
-    const timer = window.setInterval(refreshTrace, 4000)
-    return () => window.clearInterval(timer)
-  }, [])
+  useEffect(() => { void refresh() }, [])
 
-  async function refreshTrace() {
+  async function refresh() {
     try {
       const next = await window.desktop.getWorkTrace()
       setPayload(next)
-      setSelectedId((current) => current && next.trace.some((entry) => entry.trace_id === current) ? current : next.trace[0]?.trace_id ?? '')
-      setMessage(next.trace.length ? '轨迹已同步' : '暂无轨迹，载入演示或启动引擎后会在这里记录处理过程')
+      setSelectedId((current) => current || next.trace[0]?.trace_id || '')
+      setMessage(next.trace.length ? '工作轨迹已更新' : '暂无工作轨迹')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '读取工作轨迹失败')
-    }
-  }
-
-  async function loadDemoTrace() {
-    try {
-      setMessage('正在载入演示轨迹...')
-      await window.desktop.loadDemo()
-      await refreshTrace()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '载入演示失败')
+      setMessage(errorMessage(error))
     }
   }
 
   return (
     <main className="advanced-shell work-trace-shell">
-      <header className="advanced-header">
-        <div>
-          <h1>{title}</h1>
-          <p>记录从消息观察、候选生成到人工动作确认的完整链路。</p>
-        </div>
-        <div className="advanced-actions">
-          <button className="ghost-action" type="button" onClick={refreshTrace}>刷新</button>
-          <button className="secondary-action compact" type="button" onClick={loadDemoTrace}>载入演示</button>
-        </div>
-      </header>
-
-      <section className="trace-summary" aria-label="工作轨迹统计">
+      <header className="advanced-header"><div><span className="eyebrow">诊断</span><h1>工作轨迹</h1><p>查看从消息观察、资料检索到人工动作的完整链路。</p></div><button className="ghost-action" type="button" onClick={() => void refresh()}>刷新</button></header>
+      <section className="trace-summary">
         <Metric label="全部步骤" value={payload?.summary.total ?? 0} />
         <Metric label="观察" value={payload?.summary.observed ?? 0} />
-        <Metric label="思考" value={payload?.summary.thought ?? 0} />
-        <Metric label="行动" value={payload?.summary.acted ?? 0} />
+        <Metric label="判断" value={payload?.summary.thought ?? 0} />
+        <Metric label="动作" value={payload?.summary.acted ?? 0} />
       </section>
-
       <section className="trace-workspace">
-        <div className="trace-list" aria-label="工作轨迹列表">
-          {trace.length ? trace.map((entry) => (
-            <button
-              key={entry.trace_id}
-              className={`trace-row ${selected?.trace_id === entry.trace_id ? 'selected' : ''}`}
-              type="button"
-              onClick={() => setSelectedId(entry.trace_id)}
-            >
+        <div className="trace-list">
+          {payload?.trace.length ? payload.trace.map((entry) => (
+            <button className={`trace-row ${selected?.trace_id === entry.trace_id ? 'selected' : ''}`} type="button" key={entry.trace_id} onClick={() => setSelectedId(entry.trace_id)}>
               <span className={`phase-pill phase-${entry.phase}`}>{phaseLabel(entry.phase)}</span>
               <strong>{entry.summary}</strong>
-              <small>{entry.group_name} · {formatTime(entry.created_at)}</small>
+              <small>{entry.group_name} · {formatDate(entry.created_at)}</small>
             </button>
-          )) : (
-            <div className="trace-empty" role="status">
-              <strong>暂无工作轨迹</strong>
-              <span>{message}</span>
-            </div>
-          )}
+          )) : <div className="trace-empty"><strong>暂无工作轨迹</strong><span>{message}</span></div>}
         </div>
-
-        <aside className="trace-detail" aria-label="轨迹详情">
-          {selected ? <TraceDetail entry={selected} /> : <p>{message}</p>}
-        </aside>
+        <aside className="trace-detail">{selected ? <TraceDetail entry={selected} /> : <p>{message}</p>}</aside>
       </section>
     </main>
   )
+}
+
+function TraceDetail({ entry }: { entry: WorkTraceEntry }) {
+  return <><span className={`phase-pill phase-${entry.phase}`}>{phaseLabel(entry.phase)}</span><h2>{entry.summary}</h2><dl className="detail-grid"><DecisionLine label="群聊" value={entry.group_name} /><DecisionLine label="时间" value={formatDate(entry.created_at)} /><DecisionLine label="执行者" value={entry.actor === 'human' ? '人工' : 'Agent'} /><DecisionLine label="动作" value={entry.action || '无'} /><DecisionLine label="结果" value={entry.outcome || '无'} /><DecisionLine label="原因" value={entry.reasoning || '无'} /></dl><details className="technical-details"><summary>结构化详情</summary><pre>{JSON.stringify(entry.details ?? {}, null, 2)}</pre></details></>
+}
+
+function DecisionLine({ label, value }: { label: string; value: string }) {
+  return <><dt>{label}</dt><dd>{value}</dd></>
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>
 }
 
-function TraceDetail({ entry }: { entry: WorkTraceEntry }) {
-  return (
-    <>
-      <div className="detail-head">
-        <span className={`phase-pill phase-${entry.phase}`}>{phaseLabel(entry.phase)}</span>
-        <h2>{entry.summary}</h2>
-      </div>
-      <dl className="detail-grid">
-        <DetailRow label="群聊" value={entry.group_name} />
-        <DetailRow label="时间" value={formatTime(entry.created_at)} />
-        <DetailRow label="执行者" value={actorLabel(entry.actor)} />
-        <DetailRow label="动作" value={entry.action || '无'} />
-        <DetailRow label="结果" value={entry.outcome || '无'} />
-        <DetailRow label="原因" value={entry.reasoning || '无'} />
-      </dl>
-      <div className="detail-json">
-        <span>结构化详情</span>
-        <pre>{JSON.stringify(entry.details ?? {}, null, 2)}</pre>
-      </div>
-    </>
-  )
+function phaseLabel(phase: string): string {
+  return { observe: '观察', think: '判断', act: '动作' }[phase] ?? phase
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return <><dt>{label}</dt><dd>{value}</dd></>
+function pasteStatusMessage(result: PasteReplyResult): string {
+  if (result.paste_action === 'sent_verified') return '已自动发送到微信，消息状态已更新为已发送'
+  if (result.paste_action === 'filled_verified') return '已填入微信并校验，请检查后发送'
+  if (result.paste_action === 'filled_unverified') return '已填入微信，但需要你检查内容'
+  if (result.paste_action === 'target_not_found') return '未找到目标微信群，回复已复制到剪贴板'
+  if (result.paste_action === 'input_not_empty') return '微信输入框已有内容，为避免覆盖，本次未填入'
+  return result.message
 }
 
-function phaseLabel(phase: string) {
-  return ({ observe: '观察', think: '思考', act: '行动' } as Record<string, string>)[phase] ?? phase
+function formatDate(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-function actorLabel(actor: string) {
-  return ({ agent: 'Agent', human: '人工' } as Record<string, string>)[actor] ?? actor
-}
-
-function formatTime(raw: string) {
-  const time = new Date(raw)
-  if (Number.isNaN(time.getTime())) return raw
-  return time.toLocaleString('zh-CN', { hour12: false })
-}
-
-function SettingsPanel({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="settings-panel"><h2>{title}</h2>{children}</section>
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <label className="toggle-row"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>
-}
-
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
-  return <label className="field-row" htmlFor={htmlFor}><span>{label}</span>{children}</label>
-}
-
-function ReadOnlyLine({ label, value }: { label: string; value: string }) {
-  return <div className="readonly-line"><span>{label}</span><strong>{value}</strong></div>
-}
-
-function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return <button className="icon-button" aria-label={label} title={label} onClick={onClick}>{children}</button>
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export default App

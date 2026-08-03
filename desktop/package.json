@@ -6,7 +6,7 @@
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node tests/static.test.mjs",
+    "test": "node --test tests/static.test.mjs && node --experimental-strip-types --test tests/workbench-ux.test.ts",
     "typecheck": "tsc --noEmit",
     "build:main": "tsc && node scripts/copy-preload.cjs",
     "build": "npm run build:main && vite build"

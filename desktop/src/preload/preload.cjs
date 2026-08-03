@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 const desktopApi = {
   getStatus: () => ipcRenderer.invoke('app:getStatus'),
+  getReadiness: () => ipcRenderer.invoke('app:getReadiness'),
   start: () => ipcRenderer.invoke('app:start'),
   stop: () => ipcRenderer.invoke('app:stop'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
@@ -21,7 +22,8 @@ const desktopApi = {
   captureVision: () => ipcRenderer.invoke('vision:capture'),
   getVisionStatus: () => ipcRenderer.invoke('vision:getStatus'),
   openSettings: () => ipcRenderer.invoke('settings:open'),
-  openAdvanced: (page) => ipcRenderer.invoke('advanced:open', page)
+  openAdvanced: (page) => ipcRenderer.invoke('advanced:open', page),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', url)
 }
 
 contextBridge.exposeInMainWorld('desktop', desktopApi)

@@ -7,102 +7,130 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const read = (file) => readFileSync(join(root, file), 'utf8')
 
-test('main process defines narrow controller and independent settings window', () => {
+test('主进程使用完整工作台窗口并保留独立设置窗口', () => {
   const source = read('src/main/main.ts')
 
-  assert.match(source, /width:\s*380/)
-  assert.match(source, /height:\s*680/)
-  assert.match(source, /minWidth:\s*360/)
+  assert.match(source, /width:\s*1180/)
+  assert.match(source, /height:\s*760/)
+  assert.match(source, /minWidth:\s*960/)
+  assert.match(source, /minHeight:\s*680/)
   assert.match(source, /width:\s*900/)
-  assert.match(source, /height:\s*720/)
   assert.match(source, /titleBarOverlay/)
-  assert.match(source, /设置 - 夏令营 Agent/)
   assert.match(source, /--port', '0'/)
   assert.match(source, /startPromise/)
-  assert.match(source, /ipcMain\.handle\('settings:open'/)
-  assert.match(source, /ipcMain\.handle\('app:getWorkTrace'/)
-  assert.match(source, /\/api\/app\/work-trace/)
 })
 
-test('preload exposes a narrow desktop api instead of raw ipc', () => {
-  const source = read('src/preload/preload.ts')
-  const cjsSource = read('src/preload/preload.cjs')
-  const packageJson = read('package.json')
-
-  assert.match(source, /contextBridge\.exposeInMainWorld\('desktop'/)
-  assert.match(cjsSource, /contextBridge\.exposeInMainWorld\('desktop'/)
-  assert.match(cjsSource, /require\('electron'\)/)
-  assert.match(packageJson, /copy-preload\.cjs/)
-  assert.match(source, /getStatus/)
-  assert.match(source, /getSettings/)
-  assert.match(source, /saveSettings/)
-  assert.match(source, /getWorkTrace/)
-  assert.match(source, /loadDemo/)
-  assert.doesNotMatch(source, /exposeInMainWorld\('electron'/)
-})
-
-test('main process loads the commonjs preload bundle', () => {
+test('主进程提供托盘、有限通知和安全外链', () => {
   const source = read('src/main/main.ts')
 
-  assert.match(source, /preload\.cjs/)
+  assert.match(source, /\bTray\b/)
+  assert.match(source, /\bNotification\b/)
+  assert.match(source, /new Notification/)
+  assert.match(source, /新增待审核消息/)
+  assert.match(source, /shell\.openExternal/)
+  assert.match(source, /https\?:/)
+  assert.match(source, /ipcMain\.handle\('app:openExternal'/)
+  assert.match(source, /mainWindow\.hide\(\)/)
+})
+
+test('预加载层只暴露收窄后的桌面能力', () => {
+  const source = read('src/preload/preload.ts')
+  const cjsSource = read('src/preload/preload.cjs')
+
+  for (const value of ['getReadiness', 'openExternal', 'getItems', 'publishReply', 'startVision']) {
+    assert.match(source, new RegExp(`${value}:`))
+    assert.match(cjsSource, new RegExp(`${value}:`))
+  }
+  assert.match(source, /contextBridge\.exposeInMainWorld\('desktop'/)
+  assert.doesNotMatch(source, /exposeInMainWorld\('electron'/)
   assert.ok(existsSync(join(root, 'scripts/copy-preload.cjs')))
 })
 
-test('renderer contains controller, settings, and advanced page surfaces', () => {
+test('共享类型定义三种运行模式和就绪检查', () => {
+  const source = read('src/shared/types.ts')
+
+  assert.match(source, /OperationProfile/)
+  assert.match(source, /'safe_review'/)
+  assert.match(source, /'assisted'/)
+  assert.match(source, /'automatic'/)
+  assert.match(source, /interface ReadinessCheck/)
+  assert.match(source, /interface ReadinessPayload/)
+  assert.match(source, /getReadiness\(\)/)
+  assert.match(source, /openExternal\(url: string\)/)
+})
+
+test('UX 纯函数集中处理模式、置信度、搜索和主操作', () => {
+  const source = read('src/renderer/workbench-ux.ts')
+
+  for (const name of [
+    'resolveOperationProfile',
+    'applyOperationProfile',
+    'confidenceLevel',
+    'recommendedPrimaryAction',
+    'filterWorkbenchItems',
+    'extractSafeSourceUrl'
+  ]) {
+    assert.match(source, new RegExp(`function ${name}`))
+  }
+  assert.match(source, /安全试运行/)
+  assert.match(source, /人工辅助/)
+  assert.match(source, /自动回复/)
+  assert.match(source, /高/)
+  assert.match(source, /中/)
+  assert.match(source, /低/)
+})
+
+test('工作台提供运行检查、搜索、单主操作和折叠详情', () => {
   const app = read('src/renderer/App.tsx')
   const css = read('src/renderer/styles.css')
 
-  assert.match(app, /夏令营 Agent/)
-  assert.match(app, /document\.title/)
-  assert.match(app, /设置 - 夏令营 Agent/)
-  assert.match(app, /启动引擎/)
-  assert.match(app, /配置/)
-  assert.match(app, /消息处理/)
-  assert.match(app, /候选库/)
-  assert.match(app, /工作轨迹/)
-  assert.match(app, /WorkTracePage/)
-  assert.match(app, /getWorkTrace/)
-  assert.match(app, /载入演示/)
-  assert.match(app, /结构化详情/)
-  assert.match(css, /--accent:\s*#18c28b/)
-  assert.match(css, /\.controller-shell/)
-  assert.match(css, /width:\s*100vw/)
-  assert.match(css, /\.trace-workspace/)
-  assert.match(css, /\.phase-pill/)
+  assert.match(app, /运行检查/)
+  assert.match(app, /开始观察|停止观察/)
+  assert.match(app, /搜索消息/)
+  assert.match(app, /更多操作/)
+  assert.match(app, /技术详情/)
+  assert.match(app, /Ctrl\+Enter/)
+  assert.match(app, /busyAction/)
+  assert.match(app, /aria-live="polite"/)
+  assert.match(app, /openExternal/)
+  assert.doesNotMatch(app, /旧规则/)
+  assert.match(css, /\.readiness-card/)
+  assert.match(css, /\.queue-search/)
+  assert.match(css, /\.more-actions/)
+  assert.match(css, /\.toast/)
 })
 
-test('settings page edits wechat bridge group keywords and polling interval', () => {
+test('工作台轮询监听消息并支持待处理和历史记录', () => {
   const app = read('src/renderer/App.tsx')
-  const types = read('src/shared/types.ts')
 
-  assert.match(types, /interface WeChatBridgeSettings/)
-  assert.match(types, /send_mode:\s*string/)
-  assert.match(types, /saveSettings\(settings: AppSettingsUpdate\)/)
-  assert.match(app, /value=\{wechatForm\.group_name\}/)
-  assert.match(app, /value=\{wechatForm\.keywordsText\}/)
-  assert.match(app, /value=\{wechatForm\.poll_interval_seconds\}/)
-  assert.match(app, /value=\{wechatForm\.send_mode\}/)
-  assert.match(app, /manual_confirm/)
-  assert.match(app, /auto_send/)
-  assert.match(app, /saveWechatSettings/)
-  assert.match(app, /wechat:\s*\{/)
-  assert.match(app, /send_mode:\s*wechatForm\.send_mode/)
-  assert.match(app, /监听关键字/)
-  assert.match(app, /保存微信桥接/)
+  assert.match(app, /vision\.running/)
+  assert.match(app, /window\.setInterval/)
+  assert.match(app, /messageScope/)
+  assert.match(app, /reviewStatusFilter/)
+  assert.match(app, /待处理/)
+  assert.match(app, /历史记录/)
+  assert.match(app, /filterWorkbenchItems/)
 })
 
-test('controller layout is constrained for a narrow desktop window', () => {
-  const css = read('src/renderer/styles.css')
+test('设置页只突出基础设置并折叠高级参数', () => {
+  const app = read('src/renderer/App.tsx')
+  const ux = read('src/renderer/workbench-ux.ts')
+  const settingsWindow = app.slice(app.indexOf('function SettingsWindow'), app.indexOf('function WorkTracePage'))
 
-  assert.match(css, /\.controller-shell\s*{[^}]*display:\s*flex/s)
-  assert.match(css, /\.controller-shell\s*{[^}]*min-width:\s*0/s)
-  assert.match(css, /\.panel\s*{[^}]*min-width:\s*0/s)
-  assert.match(css, /\.log-panel\s*{[^}]*flex:\s*1/s)
-  assert.match(css, /\.bottom-bar\s*{[^}]*flex-shrink:\s*0/s)
-  assert.match(css, /-webkit-app-region:\s*drag/)
+  assert.match(app, /基础设置/)
+  assert.match(app, /高级参数/)
+  assert.match(app, /operationProfile/)
+  assert.match(ux, /安全试运行/)
+  assert.match(ux, /人工辅助/)
+  assert.match(ux, /自动回复/)
+  assert.match(app, /保存设置/)
+  assert.doesNotMatch(settingsWindow, /show_assist_actions/)
+  assert.doesNotMatch(settingsWindow, /openAdvanced\('messages'\)/)
+  assert.doesNotMatch(settingsWindow, /openAdvanced\('candidates'\)/)
+  assert.doesNotMatch(settingsWindow, /openAdvanced\('rag'\)/)
 })
 
-test('ipc handlers are registered before the renderer window is created', () => {
+test('IPC 在窗口创建前注册并持续后台轮询', () => {
   const source = read('src/main/main.ts')
   const readyBlock = source.slice(source.indexOf('app.whenReady().then'))
   const firstHandler = readyBlock.indexOf("ipcMain.handle('settings:open'")
@@ -111,249 +139,36 @@ test('ipc handlers are registered before the renderer window is created', () => 
   assert.ok(firstHandler >= 0)
   assert.ok(firstWindow >= 0)
   assert.ok(firstHandler < firstWindow)
+  assert.match(source, /scheduleItemPoll/)
+  assert.match(source, /pollItemsInBackground/)
+  assert.match(source, /private itemFetchPromise/)
 })
 
-test('desktop api exposes workbench and vision operations', () => {
+test('工作台保留发送、转人工和完成审核的完整 IPC 链路', () => {
   const types = read('src/shared/types.ts')
   const preload = read('src/preload/preload.ts')
-  const cjsPreload = read('src/preload/preload.cjs')
   const main = read('src/main/main.ts')
 
   for (const name of [
-    'getItems',
-    'ask',
     'pasteReply',
     'publishReply',
     'confirmSent',
     'saveCandidate',
     'escalateMessage',
-    'completeReview',
-    'startVision',
-    'stopVision',
-    'captureVision',
-    'getVisionStatus'
+    'completeReview'
   ]) {
     assert.match(types, new RegExp(`${name}\\(`))
     assert.match(preload, new RegExp(`${name}:`))
-    assert.match(cjsPreload, new RegExp(`${name}:`))
   }
-
-  assert.match(main, /ipcMain\.handle\(\s*'workbench:getItems'/)
-  assert.match(main, /ipcMain\.handle\('workbench:escalateMessage'/)
-  assert.match(main, /ipcMain\.handle\('workbench:completeReview'/)
-  assert.match(main, /ipcMain\.handle\('workbench:publishReply'/)
-  assert.match(main, /ipcMain\.handle\('vision:capture'/)
-  assert.match(main, /\/api\/items/)
-  assert.match(main, /scope=\$\{encodeURIComponent\(scope\)\}/)
+  assert.match(main, /\/api\/wechat\/publish/)
   assert.match(main, /\/api\/messages\/escalate/)
   assert.match(main, /\/api\/messages\/complete-review/)
-  assert.match(main, /\/api\/wechat\/publish/)
-  assert.match(main, /\/api\/vision\/capture/)
 })
 
-test('renderer main window contains the unified desktop workbench', () => {
-  const app = read('src/renderer/App.tsx')
-  const css = read('src/renderer/styles.css')
+test('生产构建仍使用 CommonJS 预加载文件', () => {
+  const source = read('src/main/main.ts')
+  const packageJson = read('package.json')
 
-  assert.match(app, /DesktopWorkbench/)
-  assert.match(app, /处理流程/)
-  assert.match(app, /观察并获取待回复消息/)
-  assert.match(app, /选择待处理消息/)
-  assert.match(app, /确认回复草稿/)
-  assert.match(app, /选中消息详情/)
-  assert.match(app, /填入微信/)
-  assert.match(app, /自动发布/)
-  assert.match(app, /我已发送/)
-  assert.match(app, /保存候选/)
-  assert.match(app, /启动观察/)
-  assert.match(app, /captureVision/)
-  assert.match(css, /\.workbench-shell/)
-  assert.match(css, /grid-template-columns:\s*232px minmax\(520px,\s*1fr\) 320px/)
-  assert.match(css, /\.workflow-panel/)
-  assert.doesNotMatch(app, /openAdvanced\('messages'\)/)
-})
-
-test('desktop product no longer presents the browser workbench as the user entry', () => {
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(app, /启动视觉观察/)
-  assert.match(app, /识别当前窗口/)
-  assert.match(app, /工作轨迹/)
-  assert.doesNotMatch(app, /高级工作台页面会承接旧浏览器工作台能力/)
-})
-
-test('workbench layout has responsive narrow and wide viewport rules', () => {
-  const app = read('src/renderer/App.tsx')
-  const css = read('src/renderer/styles.css')
-
-  assert.match(app, /empty-message-state/)
-  assert.match(css, /grid-template-columns:\s*232px minmax\(520px,\s*1fr\) 320px/)
-  assert.match(css, /grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/)
-  assert.match(css, /\.primary-action\.compact\s*{[^}]*flex:\s*0 0 auto/s)
-  assert.match(css, /@media \(max-width:\s*1180px\)/)
-  assert.match(css, /@media \(max-width:\s*960px\)/)
-  assert.match(css, /grid-template-columns:\s*1fr/)
-  assert.match(css, /\.workflow-panel\s*{[^}]*overflow:\s*visible/s)
-  assert.match(css, /\.workbench-shell\s*{[^}]*overflow:\s*auto/s)
-})
-
-test('workbench narrow viewport stacks panels without clipping content rows', () => {
-  const css = read('src/renderer/styles.css')
-  const narrowBlock = css.slice(css.indexOf('@media (max-width: 960px)'))
-
-  assert.match(narrowBlock, /\.workbench-shell\s*{[^}]*height:\s*100vh/s)
-  assert.match(narrowBlock, /\.workbench-shell\s*{[^}]*grid-template-rows:\s*auto auto auto/s)
-  assert.doesNotMatch(narrowBlock, /\.workbench-shell\s*{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s)
-  assert.match(narrowBlock, /\.workbench-shell\s*{[^}]*overflow:\s*auto/s)
-  assert.match(narrowBlock, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto auto minmax\(300px,\s*auto\) minmax\(300px,\s*auto\)/s)
-  assert.match(narrowBlock, /\.workbench-sidebar\s*{[^}]*min-height:\s*auto/s)
-  assert.match(narrowBlock, /\.workflow-panel\s*{[^}]*min-height:\s*auto/s)
-  assert.match(narrowBlock, /\.decision-panel\s*{[^}]*min-height:\s*auto/s)
-})
-
-test('workbench typography wraps inside narrow desktop cards', () => {
-  const css = read('src/renderer/styles.css')
-
-  assert.match(css, /\.workflow-panel\s*{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) minmax\(240px,\s*30vh\)/s)
-  assert.match(css, /\.workflow-header\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s)
-  assert.match(css, /\.workflow-header h1\s*{[^}]*overflow-wrap:\s*anywhere/s)
-  assert.match(css, /\.workflow-header h1\s*{[^}]*font-size:\s*clamp\(20px,\s*5vw,\s*24px\)/s)
-  assert.match(css, /\.workflow-header p\s*{[^}]*max-width:\s*100%/s)
-  assert.match(css, /\.decision-panel header\s*{[^}]*display:\s*grid/s)
-  assert.match(css, /\.decision-panel h2\s*{[^}]*overflow-wrap:\s*anywhere/s)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.workflow-header\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
-})
-
-test('workbench narrow layout keeps reply actions and detail labels readable', () => {
-  const css = read('src/renderer/styles.css')
-
-  assert.match(css, /\.reply-composer\s*{[^}]*grid-template-rows:\s*auto minmax\(96px,\s*1fr\) auto auto/s)
-  assert.match(css, /\.reply-composer\s*{[^}]*overflow:\s*hidden/s)
-  assert.match(css, /\.reply-composer textarea,[\s\S]*?height:\s*100%/s)
-  assert.match(css, /\.decision-grid dt\s*{[^}]*word-break:\s*keep-all/s)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.workflow-panel\s*{[^}]*minmax\(300px,\s*auto\)/)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.reply-actions\s*{[^}]*display:\s*grid/s)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.reply-actions\s*{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(132px,\s*1fr\)\)/)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.message-row\s*{[^}]*grid-template-columns:\s*1fr/s)
-  assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*\.decision-grid\s*{[^}]*grid-template-columns:\s*minmax\(96px,\s*max-content\) minmax\(0,\s*1fr\)/)
-  assert.match(css, /@media \(max-width:\s*420px\)[\s\S]*\.decision-grid\s*{[^}]*grid-template-columns:\s*1fr/s)
-})
-
-test('workbench refreshes message list while observation is running', () => {
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(app, /vision\.running/)
-  assert.match(app, /window\.setInterval\(refreshItems,\s*Math\.max\(2000,\s*status\.engine\.poll_interval_seconds \* 1000\)\)/)
-})
-
-test('workbench exposes rag ai generation metadata in types and details', () => {
-  const types = read('src/shared/types.ts')
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(types, /generation_mode:\s*string/)
-  assert.match(types, /generation_model:\s*string/)
-  assert.match(types, /generation_error:\s*string/)
-  assert.match(app, /label="生成方式"/)
-  assert.match(app, /label="生成模型"/)
-  assert.match(app, /label="生成降级原因"/)
-})
-
-test('main process keeps polling wechat when the renderer is backgrounded', () => {
-  const main = read('src/main/main.ts')
-
-  assert.match(main, /scheduleItemPoll/)
-  assert.match(main, /pollItemsInBackground/)
-  assert.match(main, /request<AppStatus>\('\/api\/app\/status'\)/)
-  assert.match(main, /request<WorkbenchItemsPayload>\('\/api\/items'\)/)
-  assert.match(main, /poll_interval_seconds \* 1000/)
-  assert.match(main, /clearTimeout/)
-})
-
-test('main process serializes renderer and background item pulls', () => {
-  const main = read('src/main/main.ts')
-
-  assert.match(main, /private itemFetchPromise/)
-  assert.match(main, /async getItems\([\s\S]*?\): Promise<WorkbenchItemsPayload> \{[\s\S]*?return this\.fetchItems\(\)/)
-  assert.match(main, /private async fetchItems\(\): Promise<WorkbenchItemsPayload>/)
-  assert.match(main, /await this\.fetchItems\(\)/)
-})
-
-test('workbench button actions surface missing ipc and service errors', () => {
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(app, /getDesktopMethod/)
-  assert.match(app, /runAction\('正在启动视觉观察\.\.\.'/)
-  assert.match(app, /runAction\('正在识别当前窗口\.\.\.'/)
-  assert.match(app, /runAction\('正在停止观察\.\.\.'/)
-  assert.match(app, /runAction\('正在自动发布\.\.\.'/)
-  assert.match(app, /桌面主进程尚未加载/)
-  assert.match(app, /请完全退出并重新启动桌面版/)
-  assert.match(app, /errorMessage\(error\)/)
-})
-
-test('workbench refreshes replied status immediately after publish or confirmation', () => {
-  const app = read('src/renderer/App.tsx')
-  const publishBlock = app.slice(app.indexOf('async function publishReply'), app.indexOf('async function confirmSent'))
-  const confirmBlock = app.slice(app.indexOf('async function confirmSent'), app.indexOf('async function saveCandidate'))
-
-  assert.match(publishBlock, /await refreshItems\(\)/)
-  assert.match(confirmBlock, /await refreshItems\(\)/)
-})
-
-test('workbench exposes pending and history review queues with diagnostic details', () => {
-  const app = read('src/renderer/App.tsx')
-  const css = read('src/renderer/styles.css')
-  const types = read('src/shared/types.ts')
-
-  assert.match(app, /待审核/)
-  assert.match(app, /历史记录/)
-  assert.match(app, /messageScope/)
-  assert.match(app, /reviewStatusFilter/)
-  assert.match(app, /getItems\(nextScope,\s*nextReviewStatus\)/)
-  assert.match(app, /未命中旧规则/)
-  assert.match(app, /未命中原因/)
-  assert.match(app, /调试审核模式已开启/)
-  assert.match(types, /review_status:\s*ReviewStatus/)
-  assert.match(types, /match_status:\s*MatchStatus/)
-  assert.match(types, /unmatched_reason_labels:\s*string\[\]/)
-  assert.match(css, /\.queue-tabs/)
-  assert.match(css, /\.diagnostic-banner/)
-})
-
-test('workbench review actions include escalation and explicit completion', () => {
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(app, /async function escalateMessage/)
-  assert.match(app, /async function completeReview/)
-  assert.match(app, />转人工</)
-  assert.match(app, />完成审核</)
-  assert.match(app, /await refreshItems\(\)/)
-  assert.match(app, /处理备注（可选）/)
-})
-
-test('settings exposes the default-on debug review mode', () => {
-  const app = read('src/renderer/App.tsx')
-  const types = read('src/shared/types.ts')
-
-  assert.match(types, /debug_review_mode:\s*boolean/)
-  assert.match(app, /调试审核模式/)
-  assert.match(app, /checked=\{wechatForm\.debug_review_mode\}/)
-  assert.match(app, /debug_review_mode:\s*wechatForm\.debug_review_mode/)
-})
-
-test('paste result exposes precise compose statuses and safe fill messages', () => {
-  const types = read('src/shared/types.ts')
-  const app = read('src/renderer/App.tsx')
-
-  assert.match(types, /paste_action:\s*string/)
-  assert.match(types, /target_status:\s*string/)
-  assert.match(types, /input_status:\s*string/)
-  assert.match(types, /verification_status:\s*string/)
-  assert.match(types, /fallback_reason:\s*string/)
-  assert.match(app, /已填入并校验，请在微信中检查后手动发送/)
-  assert.match(app, /已填入但无法自动校验，请人工检查/)
-  assert.match(app, /未找到目标微信群，已复制到剪贴板/)
-  assert.match(app, /输入框已有内容，未覆盖/)
-  assert.match(app, /已自动发布到微信/)
-  assert.match(app, /请先在配置中选择系统自动发送/)
+  assert.match(source, /preload\.cjs/)
+  assert.match(packageJson, /copy-preload\.cjs/)
 })

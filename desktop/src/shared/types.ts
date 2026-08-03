@@ -1,4 +1,18 @@
 export type EngineStatus = 'idle' | 'starting' | 'running' | 'error'
+export type OperationProfile = 'safe_review' | 'assisted' | 'automatic'
+
+export interface ReadinessCheck {
+  key: 'engine' | 'group' | 'ai' | 'wechat'
+  label: string
+  ready: boolean
+  detail: string
+}
+
+export interface ReadinessPayload {
+  ready: boolean
+  operation_profile: OperationProfile
+  checks: ReadinessCheck[]
+}
 
 export interface DesktopSettings {
   window: Record<string, number>
@@ -176,6 +190,7 @@ export interface VisionCapturePayload extends WorkbenchItemsPayload {
 
 export interface DesktopApi {
   getStatus(): Promise<AppStatus>
+  getReadiness(): Promise<ReadinessPayload>
   start(): Promise<AppStatus>
   stop(): Promise<AppStatus>
   getSettings(): Promise<AppSettingsPayload>
@@ -196,4 +211,5 @@ export interface DesktopApi {
   getVisionStatus(): Promise<VisionStatus>
   openSettings(): Promise<void>
   openAdvanced(page: string): Promise<void>
+  openExternal(url: string): Promise<void>
 }

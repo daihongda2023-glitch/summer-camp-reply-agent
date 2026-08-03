@@ -3,6 +3,7 @@ import type { AppSettingsUpdate, DesktopApi, MessageScope, ReviewStatus } from '
 
 const desktopApi: DesktopApi = {
   getStatus: () => ipcRenderer.invoke('app:getStatus'),
+  getReadiness: () => ipcRenderer.invoke('app:getReadiness'),
   start: () => ipcRenderer.invoke('app:start'),
   stop: () => ipcRenderer.invoke('app:stop'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
@@ -23,7 +24,8 @@ const desktopApi: DesktopApi = {
   captureVision: () => ipcRenderer.invoke('vision:capture'),
   getVisionStatus: () => ipcRenderer.invoke('vision:getStatus'),
   openSettings: () => ipcRenderer.invoke('settings:open'),
-  openAdvanced: (page: string) => ipcRenderer.invoke('advanced:open', page)
+  openAdvanced: (page: string) => ipcRenderer.invoke('advanced:open', page),
+  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url)
 }
 
 contextBridge.exposeInMainWorld('desktop', desktopApi)
