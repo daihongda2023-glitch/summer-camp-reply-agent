@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
+from .activity import load_activity
 from .chat_log_sanitizer import hash_identifier
 from .engine import AnswerEngine
 from .knowledge import KnowledgeBase
@@ -46,17 +47,23 @@ class WorkbenchSession:
         review: OperatorReview | None = None,
         rag_answer_generator=None,
         semantic_analyzer=None,
+        activity_id: str | None = None,
     ):
         self.group_config = group_config
+        self.activity = load_activity(activity_id)
         self.trigger_engine = TriggerEngine(group_config)
         self.review = review or OperatorReview(
             AnswerEngine(
-                KnowledgeBase.from_default(),
-                rag_retriever=load_default_rag_retriever(),
+                _knowledge_for(self.activity),
+                rag_retriever=_retriever_for(self.activity),
                 rag_answer_generator=rag_answer_generator,
                 semantic_analyzer=semantic_analyzer,
+                organizer=self.activity.organizer,
+                notice_channel=self.activity.notice_channel,
+                assignment_contact=self.activity.assignment_contact,
             )
         )
+        _apply_activity_prompts(self.activity, rag_answer_generator, semantic_analyzer)
         self.reply_modes = ReplyModeController(group_config)
         self.candidate_store = ReplyCandidateStore(candidate_path)
         self.log_store = ReplyLogStore(log_path)
@@ -93,7 +100,7 @@ class WorkbenchSession:
             or self.group_config.mode == "auto"
         )
         if should_analyze:
-            card = self.review.create_card(event.content)
+            card = self.review.create_card(event.content, on_date=_event_date(event.message_time))
         else:
             card = ReviewCard(
                 original_question=event.content,
@@ -318,3 +325,40 @@ class WorkbenchSession:
                 details=details or {},
             )
         )
+
+
+def _knowledge_for(profile):
+    if profile.id == "summer-camp":
+        return KnowledgeBase.from_default()
+    return KnowledgeBase.from_json(profile.knowledge_path)
+
+
+def _retriever_for(profile):
+    if profile.id == "summer-camp":
+        return load_default_rag_retriever()
+    return None
+
+
+def _event_date(message_time: str) -> date | None:
+    raw = message_time.strip()
+    if len(raw) < 10:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _apply_activity_prompts(profile, rag_answer_generator, semantic_analyzer) -> None:
+    if rag_answer_generator is not None and hasattr(rag_answer_generator, "system_instructions"):
+        from .rag_ai import instructions_for_role
+
+        rag_answer_generator.system_instructions = instructions_for_role(profile.assistant_role)
+        if hasattr(rag_answer_generator, "prompt_audience"):
+            rag_answer_generator.prompt_audience = profile.prompt_audience
+    if semantic_analyzer is not None and hasattr(semantic_analyzer, "system_instructions"):
+        from .semantic_router import router_instructions_for_role
+
+        semantic_analyzer.system_instructions = router_instructions_for_role(profile.router_role)
+        if hasattr(semantic_analyzer, "prompt_audience"):
+            semantic_analyzer.prompt_audience = profile.prompt_audience

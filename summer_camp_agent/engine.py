@@ -43,6 +43,9 @@ class AnswerEngine:
         rag_answer_generator=None,
         semantic_analyzer=None,
         providers: list[AnswerProvider] | None = None,
+        organizer: str = "组委会",
+        notice_channel: str = "官方咨询群",
+        assignment_contact: str = "课程助教或导师",
     ):
         self.knowledge_base = knowledge_base
         self.today = today or date.today()
@@ -50,8 +53,12 @@ class AnswerEngine:
         self.rag_answer_generator = rag_answer_generator
         self.semantic_analyzer = semantic_analyzer
         self.provider_chain = AnswerProviderChain(providers) if providers is not None else None
+        self.organizer = organizer.strip() or "组委会"
+        self.notice_channel = notice_channel.strip() or "官方咨询群"
+        self.assignment_contact = assignment_contact.strip() or "课程助教或导师"
 
-    def answer(self, text: str) -> AnswerResult:
+    def answer(self, text: str, *, on_date: date | None = None) -> AnswerResult:
+        active_today = on_date or self.today
         if self.provider_chain is not None:
             return self.provider_chain.answer(text)
 
@@ -71,7 +78,7 @@ class AnswerEngine:
                 if semantic_item is not None
                 else confidence
             )
-            if selected_item.is_valid_on(self.today):
+            if selected_item.is_valid_on(active_today):
                 return self._faq_answer(
                     selected_item,
                     final_confidence,
@@ -144,6 +151,8 @@ class AnswerEngine:
         return self._needs_info(
             semantic=semantic,
             faq_confidence=confidence,
+            organizer=self.organizer,
+            notice_channel=self.notice_channel,
         )
 
     @staticmethod
@@ -277,14 +286,20 @@ class AnswerEngine:
             return AnswerResult(
                 action="human_fallback",
                 reason="personal_status",
-                reply="这个问题涉及个人报名状态、录取结果或面试结果，需要由组委会人工确认，agent 不会在群内自动查询或判断。",
+                reply=(
+                    "这个问题涉及个人报名状态、录取结果或面试结果，"
+                    f"需要由{self.organizer}人工确认，agent 不会在群内自动查询或判断。"
+                ),
                 generation_mode="human_fallback",
             )
         if "作业" in text and self._contains_any(text, ["答案", "直接帮我", "代写", "代码跑不通", "debug", "改出答案"]):
             return AnswerResult(
                 action="human_fallback",
                 reason="technical_assignment",
-                reply="这个问题涉及技术作业的具体答案、代码 debug 或评分边界，需要转给课程助教或导师处理，agent 只提供规则说明和资料导航。",
+                reply=(
+                    "这个问题涉及技术作业的具体答案、代码 debug 或评分边界，"
+                    f"需要转给{self.assignment_contact}处理，agent 只提供规则说明和资料导航。"
+                ),
                 generation_mode="human_fallback",
             )
         if self._contains_any(text, ["生病", "受伤", "安全", "突发", "冲突", "投诉"]):
@@ -301,11 +316,17 @@ class AnswerEngine:
         *,
         semantic: SemanticAnalysisResult | None = None,
         faq_confidence: float = 0.0,
+        organizer: str = "组委会",
+        notice_channel: str = "官方咨询群",
     ) -> AnswerResult:
         semantic = semantic or SemanticAnalysisResult("not_configured")
         return AnswerResult(
             action="needs_info",
-            reply="这个问题当前资料还没有明确说明，建议等待官方咨询群后续通知，或联系组委会确认。建议将这个问题标记为待补充 FAQ，等组委会确认后再更新知识库。",
+            reply=(
+                "这个问题当前资料还没有明确说明，"
+                f"建议等待{notice_channel}后续通知，或联系{organizer}确认。"
+                f"建议将这个问题标记为待补充 FAQ，等{organizer}确认后再更新知识库。"
+            ),
             reason="unknown",
             generation_mode="needs_info",
             semantic_status=semantic.status,

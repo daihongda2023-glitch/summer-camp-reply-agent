@@ -1,6 +1,8 @@
-# 夏令营自动回复 Agent 文档索引
+# 活动值守 Activity Desk 文档索引
 
-本目录用于沉淀企业微信群自动回复 agent 的产品方向、回复策略、知识库结构和资料接入清单。当前资料主要来自根目录招募文章，后续正式群公告、课程说明、作业说明、面试通知和线下手册应持续补充到知识库。
+问答内核按活动包工作，线上活动、线下活动和混合活动使用同一套回复、转人工和资料过期规则。`summer-camp` 是参考活动包。新增活动的方法见仓库根目录 `README.md`。
+
+本目录继续保留企业微信群场景的产品说明、回复策略、知识库结构和资料接入清单。夏令营资料只属于 `summer-camp` 活动包。
 
 ## 阅读顺序
 
@@ -23,6 +25,11 @@
 | 命令 | 说明 |
 | --- | --- |
 | `python -m unittest discover -s tests` | 运行完整测试 |
+| `python -m summer_camp_agent.cli activities` | 列出活动包和适用对象 |
+| `python -m summer_camp_agent.cli models` | 查看 FAQ 与可选模型 |
+| `python -m summer_camp_agent.cli check` | 检查全部活动包 |
+| `python -m summer_camp_agent.cli init-activity city-reading --name "城市阅读会" --formats offline --serves "读书会组织者,现场志愿者"` | 生成一场新活动的模板 |
+| `python -m summer_camp_agent.cli demo` | 离线演示各活动包的回复结果 |
 | `python -m summer_camp_agent.cli validate` | 校验默认知识库 `data/faq.json` |
 | `python scripts/validate_knowledge.py data/faq.json` | 使用脚本校验指定知识库 |
 | `python -m summer_camp_agent.cli ask "报名入口在哪里？"` | 输入学生问题并生成建议回复 |

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
-from urllib.request import Request, urlopen as default_urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from .chat_log_sanitizer import AliasRegistry, SanitizedMessage, build_sanitized_message, hash_identifier
 
@@ -132,13 +132,18 @@ def _read_weflow_config_token(path: Path) -> str:
     return str(raw.get("httpApiToken") or "").strip()
 
 
+def _open_loopback(request, timeout=10):
+    opener = build_opener(ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
+
+
 class WeFlowImportClient:
     def __init__(
         self,
         base_url: str,
         token: str,
         *,
-        urlopen: Callable[..., Any] = default_urlopen,
+        urlopen: Callable[..., Any] = _open_loopback,
         timeout_seconds: int = 10,
     ):
         self.base_url = _validate_local_base_url(base_url)

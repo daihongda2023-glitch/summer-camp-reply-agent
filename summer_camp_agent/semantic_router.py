@@ -28,6 +28,15 @@ SYSTEM_INSTRUCTIONS = """你是夏令营咨询系统的语义路由器，只做�
 canonical_question（字符串）、intent（字符串）、faq_candidate_ids（字符串数组）、
 rag_candidate_ids（字符串数组）、rag_queries（最多三个字符串）、semantic_confidence（0 到 1 的数字）、
 requires_human（布尔值）和 reason（字符串）。不得输出其他字段。"""
+DEFAULT_ROUTER_ROLE = "夏令营咨询系统的语义路由器"
+DEFAULT_PROMPT_AUDIENCE = "学生"
+
+
+def router_instructions_for_role(role: str) -> str:
+    cleaned = role.strip() or DEFAULT_ROUTER_ROLE
+    if cleaned == DEFAULT_ROUTER_ROLE:
+        return SYSTEM_INSTRUCTIONS
+    return SYSTEM_INSTRUCTIONS.replace(DEFAULT_ROUTER_ROLE, cleaned, 1)
 
 
 @dataclass(frozen=True)
@@ -74,6 +83,8 @@ class OpenAISemanticAnalyzer:
         self.model = model.strip() or DEFAULT_OPENAI_CHAT_MODEL
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.system_instructions = SYSTEM_INSTRUCTIONS
+        self.prompt_audience = DEFAULT_PROMPT_AUDIENCE
 
     @classmethod
     def from_env(cls) -> OpenAISemanticAnalyzer | None:
@@ -94,7 +105,13 @@ class OpenAISemanticAnalyzer:
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(
-                _request_payload(self.model, question, catalog),
+                _request_payload(
+                    self.model,
+                    question,
+                    catalog,
+                    system_instructions=self.system_instructions,
+                    audience=self.prompt_audience,
+                ),
                 ensure_ascii=False,
             ).encode("utf-8"),
             headers={
@@ -145,6 +162,8 @@ def _request_payload(
     model: str,
     question: str,
     catalog: SemanticCatalog,
+    system_instructions: str = SYSTEM_INSTRUCTIONS,
+    audience: str = DEFAULT_PROMPT_AUDIENCE,
 ) -> dict[str, object]:
     catalog_payload = {
         "faq_items": catalog.faq_items,
@@ -153,11 +172,11 @@ def _request_payload(
     return {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+            {"role": "system", "content": system_instructions},
             {
                 "role": "user",
                 "content": (
-                    f"学生问题：\n{question.strip()}\n\n"
+                    f"{audience}问题：\n{question.strip()}\n\n"
                     f"可选知识目录：\n"
                     f"{json.dumps(catalog_payload, ensure_ascii=False)}"
                 ),

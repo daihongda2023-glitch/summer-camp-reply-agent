@@ -155,7 +155,7 @@ class FullReplyChainSimulationTest(unittest.TestCase):
         self.assertEqual(item["intent"], "registration.deadline")
         self.assertEqual(item["mode"], "auto_send")
         self.assertEqual(item["status"], "已发送")
-        self.assertIn("报名已于 2026 年 7 月 15 日截止", item["reply"])
+        self.assertIn("报名申请时间为即日起至 2026 年 7 月 15 日", item["reply"])
         self.assertEqual(len(state.paste_adapter.sent), 1)
 
     def test_faq_miss_uses_official_rag_and_reaches_simulated_auto_publish(self):

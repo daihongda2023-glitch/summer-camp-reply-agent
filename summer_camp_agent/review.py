@@ -40,8 +40,11 @@ class OperatorReview:
     def __init__(self, engine: AnswerEngine):
         self.engine = engine
 
-    def create_card(self, question: str) -> ReviewCard:
-        result = self.engine.answer(question)
+    def create_card(self, question: str, *, on_date=None) -> ReviewCard:
+        if on_date is None:
+            result = self.engine.answer(question)
+        else:
+            result = self.engine.answer(question, on_date=on_date)
         return ReviewCard(
             original_question=question,
             recommendation=self._recommendation_for(result.action),

@@ -6,7 +6,18 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from .activity import (
+    FORMAT_LABELS,
+    PRODUCT_NAME,
+    PRODUCT_NAME_EN,
+    ActivityError,
+    init_activity,
+    list_activities,
+    load_activity,
+    split_list,
+)
 from .chat_log_sanitizer import hash_identifier
+from .demo import run_demo
 from .engine import AnswerEngine
 from .gitlink_issue_sync import GitLinkSyncError, sync_gitlink_issues
 from .knowledge import KnowledgeBase, KnowledgeValidationError
@@ -14,7 +25,7 @@ from .rag_documents import RagDocumentError
 from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, RagEmbeddingError
 from .rag_index import RagIndexError, build_rag_index, load_rag_index
 from .rag_retriever import RagRetriever
-from .rag_runtime import create_embedding_provider, load_optional_rag_retriever
+from .rag_runtime import create_embedding_provider, load_optional_rag_retriever, model_status
 from .review import OperatorReview, ReviewCard, save_pending_question
 from .weflow_import import (
     WeFlowAuthError,
@@ -27,28 +38,41 @@ from .weflow_import import (
 
 def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
-    parser = argparse.ArgumentParser(description="夏令营自动回复 agent 本地工具")
+    parser = argparse.ArgumentParser(description=f"{PRODUCT_NAME} {PRODUCT_NAME_EN}：线上、线下和混合活动的咨询回复工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    ask_parser = subparsers.add_parser("ask", help="输入学生问题并生成建议回复")
-    ask_parser.add_argument("question", help="学生问题")
+    ask_parser = subparsers.add_parser("ask", help="输入参与者问题并生成建议回复")
+    ask_parser.add_argument("question", help="参与者问题")
     ask_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     ask_parser.add_argument("--knowledge", help="知识库 JSON 路径")
+    ask_parser.add_argument("--activity", default="summer-camp", help="活动包 ID，用 activities 命令查看")
     ask_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
     ask_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
     ask_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     review_parser = subparsers.add_parser("review", help="生成运营半自动审核卡")
-    review_parser.add_argument("question", help="学生问题")
+    review_parser.add_argument("question", help="参与者问题")
     review_parser.add_argument("--today", help="按 YYYY-MM-DD 指定当前日期，便于测试过期规则")
     review_parser.add_argument("--knowledge", help="知识库 JSON 路径")
+    review_parser.add_argument("--activity", default="summer-camp", help="活动包 ID，用 activities 命令查看")
     review_parser.add_argument("--pending-log", help="当建议标记待补充时，写入 JSONL 待确认清单")
     review_parser.add_argument("--rag-index", default="data/rag/index", help="可选 RAG 索引目录")
     review_parser.add_argument("--rag-provider", choices=["openai", "static"], default="openai", help="RAG 查询使用的 Embedding provider")
     review_parser.add_argument("--rag-token-env", default="OPENAI_API_KEY", help="保存 OpenAI API Key 的环境变量名")
 
     validate_parser = subparsers.add_parser("validate", help="校验知识库结构和自动回复安全字段")
-    validate_parser.add_argument("knowledge", nargs="?", help="知识库 JSON 路径，默认使用 data/faq.json")
+    validate_parser.add_argument("knowledge", nargs="?", help="知识库 JSON 路径，默认使用活动包知识库")
+    validate_parser.add_argument("--activity", default="summer-camp", help="活动包 ID，用 activities 命令查看")
+
+    subparsers.add_parser("activities", help="列出活动包、形式和适用对象")
+    subparsers.add_parser("demo", help="离线跑通线上、线下、混合活动包和夏令营参考包")
+    subparsers.add_parser("check", help="检查全部活动包能否被组织者和新贡献者复用")
+    subparsers.add_parser("models", help="说明哪些回复调用大模型，以及当前用的模型")
+    init_parser = subparsers.add_parser("init-activity", help="生成一场新活动的模板")
+    init_parser.add_argument("activity_id", help="小写英文 ID，例如 city-reading")
+    init_parser.add_argument("--name", required=True, help="活动名称")
+    init_parser.add_argument("--formats", required=True, help="online、offline，或 online,offline")
+    init_parser.add_argument("--serves", required=True, help="适用对象，逗号分隔。例如：社团负责人,值班志愿者")
 
     import_weflow_parser = subparsers.add_parser("import-weflow", help="从 WeFlow 本地 API 导入微信群聊天记录")
     import_weflow_parser.add_argument("--group", required=True, help="微信群聊名称")
@@ -104,7 +128,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "review":
             return _review(args)
         if args.command == "validate":
-            return _validate(args.knowledge)
+            return _validate(args.knowledge, args.activity)
+        if args.command == "activities":
+            return _activities()
+        if args.command == "demo":
+            return _demo()
+        if args.command == "check":
+            return _check()
+        if args.command == "models":
+            return _models()
+        if args.command == "init-activity":
+            return _init_activity(args)
         if args.command == "import-weflow":
             return _import_weflow(args)
         if args.command == "rag-index":
@@ -116,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
     except KnowledgeValidationError as exc:
         print(f"知识库校验失败: {exc}", file=sys.stderr)
         return 1
+    except ActivityError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except RagEmbeddingError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -143,9 +180,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _ask(args: argparse.Namespace) -> int:
-    kb = _load_knowledge(args.knowledge)
+    profile = load_activity(args.activity)
+    kb = _load_knowledge(args.knowledge, profile.id)
     today = date.fromisoformat(args.today) if args.today else None
-    result = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args)).answer(args.question)
+    retriever = _optional_rag_retriever(args) if profile.id == "summer-camp" else None
+    result = AnswerEngine(
+        kb,
+        today=today,
+        rag_retriever=retriever,
+        organizer=profile.organizer,
+        notice_channel=profile.notice_channel,
+        assignment_contact=profile.assignment_contact,
+    ).answer(args.question)
     print(f"action: {result.action}")
     if result.intent:
         print(f"intent: {result.intent}")
@@ -155,21 +201,31 @@ def _ask(args: argparse.Namespace) -> int:
         print(f"source: {result.source}")
     if result.confidence:
         print(f"confidence: {result.confidence:.2f}")
+    print(f"model: {_model_label(result)}")
     print("reply:")
     print(result.reply)
     return 0
 
 
-def _validate(path: str | None) -> int:
-    kb = _load_knowledge(path)
+def _validate(path: str | None, activity_id: str = "summer-camp") -> int:
+    kb = _load_knowledge(path, activity_id)
     print(f"知识库校验通过，共 {len(kb.items)} 条。")
     return 0
 
 
 def _review(args: argparse.Namespace) -> int:
-    kb = _load_knowledge(args.knowledge)
+    profile = load_activity(args.activity)
+    kb = _load_knowledge(args.knowledge, profile.id)
     today = date.fromisoformat(args.today) if args.today else None
-    engine = AnswerEngine(kb, today=today, rag_retriever=_optional_rag_retriever(args))
+    retriever = _optional_rag_retriever(args) if profile.id == "summer-camp" else None
+    engine = AnswerEngine(
+        kb,
+        today=today,
+        rag_retriever=retriever,
+        organizer=profile.organizer,
+        notice_channel=profile.notice_channel,
+        assignment_contact=profile.assignment_contact,
+    )
     card = OperatorReview(engine).create_card(args.question)
     pending_saved = False
     if args.pending_log and card.recommendation == "mark_pending":
@@ -273,10 +329,86 @@ def _print_review_card(card: ReviewCard, pending_saved: bool) -> None:
     print(card.reply)
 
 
-def _load_knowledge(path: str | None) -> KnowledgeBase:
+def _load_knowledge(path: str | None, activity_id: str = "summer-camp") -> KnowledgeBase:
     if path:
         return KnowledgeBase.from_json(Path(path))
-    return KnowledgeBase.from_default()
+    profile = load_activity(activity_id)
+    if profile.id == "summer-camp":
+        return KnowledgeBase.from_default()
+    return KnowledgeBase.from_json(profile.knowledge_path)
+
+
+def _activities() -> int:
+    print(f"{PRODUCT_NAME} {PRODUCT_NAME_EN}")
+    for profile in list_activities():
+        print(f"{profile.id}\t{profile.format_label}\t{profile.name}")
+        print(f"适用：{'、'.join(profile.serves)}")
+        print(profile.description)
+    return 0
+
+
+def _check() -> int:
+    profiles = list_activities()
+    print(f"{PRODUCT_NAME} {PRODUCT_NAME_EN}")
+    covered = {item for profile in profiles for item in profile.formats}
+    print(f"活动包 {len(profiles)} 个，覆盖{'、'.join(FORMAT_LABELS[item] for item in ('online', 'offline') if item in covered)}。")
+    for profile in profiles:
+        count = len(KnowledgeBase.from_json(profile.knowledge_path).items)
+        print(f"{profile.id}\t{profile.format_label}\t{count} 条\t适用：{'、'.join(profile.serves)}")
+    print("新贡献者可以运行 init-activity 提交一场自己的活动，不必修改问答内核。")
+    print("demo 和 FAQ 回复不调用大模型。可选生成模型见 models 命令。")
+    return 0
+
+
+def _models() -> int:
+    status = model_status()
+    print(f"{PRODUCT_NAME} {PRODUCT_NAME_EN}")
+    print("日常回复：活动包 FAQ，用问句和关键词匹配，不调用大模型。")
+    print("demo、check、activities 都不调用大模型。")
+    print(f"可选语义判断和资料生成：{status['chat_model']}")
+    print(f"聊天接口：{status['chat_base_url']}")
+    print(f"可选向量检索：{status['embedding_model']}")
+    print(f"向量接口：{status['embedding_url']}")
+    print(f"OPENAI_API_KEY：{status['api_key']}")
+    print("没有密钥时，只使用 FAQ。更换聊天模型时设置 OPENAI_BASE_URL 和 OPENAI_CHAT_MODEL。")
+    return 0
+
+
+def _model_label(result) -> str:
+    if result.generation_mode == "rag_ai" and result.generation_model:
+        return result.generation_model
+    return "未调用"
+
+
+def _init_activity(args: argparse.Namespace) -> int:
+    target = init_activity(
+        args.activity_id,
+        args.name,
+        split_list(args.formats),
+        split_list(args.serves),
+    )
+    print(f"已生成活动包：{target}")
+    print("下一步：修改 faq.json 里的模板答案，然后运行 validate、ask 和 check。")
+    return 0
+
+
+def _demo() -> int:
+    rows = run_demo()
+    for row in rows:
+        formats = "、".join("线上" if item == "online" else "线下" for item in row.formats)
+        print(f"activity: {row.activity_id}")
+        print(f"formats: {formats}")
+        print(f"question: {row.question}")
+        print(f"action: {row.action}")
+        if row.intent:
+            print(f"intent: {row.intent}")
+        print(f"ok: {str(row.ok).lower()}")
+        print("reply:")
+        print(row.reply)
+        print("---")
+    passed = sum(1 for row in rows if row.ok)
+    print(f"demo: {passed}/{len(rows)}")
+    return 0 if passed == len(rows) else 1
 
 
 def _configure_stdio() -> None:

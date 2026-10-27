@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
-from .rag_ai import OpenAIRagAnswerGenerator, RagAnswerGenerator
+from .rag_ai import DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CHAT_MODEL, OpenAIRagAnswerGenerator, RagAnswerGenerator
 from .rag_documents import load_document_chunks
-from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
+from .rag_embeddings import DEFAULT_EMBEDDING_MODEL, OPENAI_EMBEDDINGS_URL, OpenAIEmbeddingProvider, RagEmbeddingError, StaticEmbeddingProvider
 from .rag_index import CHUNKS_FILE, MANIFEST_FILE, RagIndexError, load_rag_index
 from .rag_retriever import LocalDocumentRagRetriever, RagRetriever
 from .semantic_router import OpenAISemanticAnalyzer, SemanticAnalyzer
@@ -14,6 +15,18 @@ from .semantic_router import OpenAISemanticAnalyzer, SemanticAnalyzer
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAG_INDEX_PATH = PROJECT_ROOT / "data" / "rag" / "index"
 DEFAULT_RAG_DOCUMENTS_PATH = PROJECT_ROOT / "data" / "rag" / "documents"
+
+
+def model_status() -> dict[str, str]:
+    chat_model = os.environ.get("OPENAI_CHAT_MODEL", "").strip() or DEFAULT_OPENAI_CHAT_MODEL
+    chat_base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or DEFAULT_OPENAI_BASE_URL
+    return {
+        "chat_model": chat_model,
+        "chat_base_url": chat_base_url.rstrip("/"),
+        "embedding_model": DEFAULT_EMBEDDING_MODEL,
+        "embedding_url": OPENAI_EMBEDDINGS_URL,
+        "api_key": "已设置" if os.environ.get("OPENAI_API_KEY", "").strip() else "未设置",
+    }
 
 
 def create_embedding_provider(

@@ -45,6 +45,7 @@ class WorkbenchApiState:
         desktop_settings_path: str | Path | None = None,
         rag_answer_generator=None,
         semantic_analyzer=None,
+        activity_id: str | None = None,
     ):
         self.group_config = group_config or GroupConfig(group_name=DEFAULT_GROUP_NAME, mode="semi_auto")
         self.trace_path = Path(trace_path) if trace_path is not None else self._default_trace_path(candidate_path)
@@ -55,6 +56,7 @@ class WorkbenchApiState:
             trace_path=self.trace_path,
             rag_answer_generator=rag_answer_generator,
             semantic_analyzer=semantic_analyzer,
+            activity_id=activity_id,
         )
         self.items: list[WorkbenchItem] = []
         isolated_data_root = Path(candidate_path).parent if Path(candidate_path) != DEFAULT_CANDIDATE_PATH else None

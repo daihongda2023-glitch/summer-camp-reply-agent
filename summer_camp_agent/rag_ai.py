@@ -20,6 +20,15 @@ SYSTEM_INSTRUCTIONS = """你是夏令营咨询群回复助手。只能依据用�
 不得补充证据中没有的日期、数字、链接、规则或承诺；证据不足时将 grounded 设为 false。
 面向学生直接作答，使用简洁自然的中文，不输出 Markdown 标题、代码块或内部分析过程。
 只输出 JSON 对象，且只能包含 answer 和 grounded 两个字段；answer 必须是字符串，grounded 必须是布尔值。"""
+DEFAULT_ASSISTANT_ROLE = "夏令营咨询群回复助手"
+DEFAULT_PROMPT_AUDIENCE = "学生"
+
+
+def instructions_for_role(role: str) -> str:
+    cleaned = role.strip() or DEFAULT_ASSISTANT_ROLE
+    if cleaned == DEFAULT_ASSISTANT_ROLE:
+        return SYSTEM_INSTRUCTIONS
+    return SYSTEM_INSTRUCTIONS.replace(DEFAULT_ASSISTANT_ROLE, cleaned, 1)
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,8 @@ class OpenAIRagAnswerGenerator:
         self.model = model.strip() or DEFAULT_OPENAI_CHAT_MODEL
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.system_instructions = SYSTEM_INSTRUCTIONS
+        self.prompt_audience = DEFAULT_PROMPT_AUDIENCE
 
     @classmethod
     def from_env(cls) -> OpenAIRagAnswerGenerator | None:
@@ -68,7 +79,13 @@ class OpenAIRagAnswerGenerator:
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(
-                _request_payload(self.model, question, evidence),
+                _request_payload(
+                    self.model,
+                    question,
+                    evidence,
+                    system_instructions=self.system_instructions,
+                    audience=self.prompt_audience,
+                ),
                 ensure_ascii=False,
             ).encode("utf-8"),
             headers={
@@ -127,15 +144,21 @@ def _build_evidence(rag_result: RagSearchResult) -> str:
     ).strip()
 
 
-def _request_payload(model: str, question: str, evidence: str) -> dict[str, object]:
+def _request_payload(
+    model: str,
+    question: str,
+    evidence: str,
+    system_instructions: str = SYSTEM_INSTRUCTIONS,
+    audience: str = DEFAULT_PROMPT_AUDIENCE,
+) -> dict[str, object]:
     return {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+            {"role": "system", "content": system_instructions},
             {
                 "role": "user",
                 "content": (
-                    f"学生问题：\n{question.strip()}\n\n"
+                    f"{audience}问题：\n{question.strip()}\n\n"
                     f"官方证据：\n{evidence}"
                 ),
             },

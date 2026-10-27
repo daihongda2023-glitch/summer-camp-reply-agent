@@ -1,0 +1,53 @@
+[
+  {
+    "id": "faq.session.link",
+    "stage": "活动进行中",
+    "intent": "session.link",
+    "question": "直播链接在哪里？",
+    "question_aliases": ["会议链接是什么", "线上入口在哪里"],
+    "keywords": ["直播", "链接", "会议"],
+    "answer": "本场是线上活动。直播间入口：https://example.com/live/open-night ，开始前 15 分钟开放。",
+    "source": "线上分享通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.format.online_only",
+    "stage": "活动进行中",
+    "intent": "format.online_only",
+    "question": "有线下会场吗？",
+    "question_aliases": ["线下地点在哪里", "需要到现场吗"],
+    "keywords": ["线下", "会场", "现场"],
+    "answer": "本场只在线上进行，不设置线下会场。请使用直播链接参与。",
+    "source": "线上分享通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.replay.schedule",
+    "stage": "活动进行中",
+    "intent": "replay.schedule",
+    "question": "回放什么时候发？",
+    "question_aliases": ["有回放吗", "录像什么时候出"],
+    "keywords": ["回放", "录像"],
+    "answer": "回放会在直播结束后 3 个工作日内发到活动群，不另行单独通知。",
+    "source": "线上分享通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  }
+]

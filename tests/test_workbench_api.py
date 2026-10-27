@@ -1,8 +1,12 @@
 ﻿import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+os.environ["no_proxy"] = "127.0.0.1,localhost"
 
 from summer_camp_agent.rag_ai import RagGenerationResult
 from summer_camp_agent.workbench_api import WorkbenchApiState, create_handler

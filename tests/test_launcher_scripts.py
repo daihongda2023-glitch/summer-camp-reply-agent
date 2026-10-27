@@ -60,9 +60,11 @@ class LauncherScriptsTest(unittest.TestCase):
         script = launcher_paths[0].read_text(encoding="utf-8")
 
         self.assertIn("REPO_ROOT_B64", script)
+        self.assertIn("%~dp0", script)
         self.assertNotIn(r"D:\workspace\codex", script)
         self.assertIn(r"scripts\start_agent_workbench.ps1", script)
         self.assertIn("Start-Process", script)
+        self.assertIn("Test-Path -LiteralPath $launcher", script)
         encoded_root = re.search(
             r'set "REPO_ROOT_B64=([^"]+)"',
             script,
@@ -70,7 +72,7 @@ class LauncherScriptsTest(unittest.TestCase):
         self.assertIsNotNone(encoded_root)
         assert encoded_root is not None
         decoded_root = base64.b64decode(encoded_root.group(1)).decode("utf-8")
-        self.assertEqual(Path(decoded_root).resolve(), ROOT.resolve())
+        self.assertTrue(Path(decoded_root).is_absolute())
 
     def test_desktop_launcher_starts_electron_app(self):
         script_path = ROOT / "scripts" / "start_desktop_app.ps1"
