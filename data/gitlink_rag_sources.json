@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    {
+      "owner": "metax-maca",
+      "repository": "op_optimization",
+      "excluded_labels": ["任务"],
+      "excluded_title_patterns": ["任务", "打卡", "作业提交", "^赛题[:：]", "指导手册"],
+      "trusted_authors": [
+        "yyyymmm",
+        "yuting2003",
+        "topshare",
+        "Beckylu",
+        "Dayuxiaoshui",
+        "L1ngYi",
+        "cory",
+        "p295ilteb"
+      ]
+    },
+    {
+      "owner": "ccf-ai-infra",
+      "repository": "Intro-ops",
+      "excluded_labels": ["任务"],
+      "excluded_title_patterns": ["任务", "打卡", "作业提交"],
+      "trusted_authors": ["ccfzj", "p295ilteb", "wawahejun"]
+    }
+  ]
+}

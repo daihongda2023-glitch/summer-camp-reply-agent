@@ -1,0 +1,15 @@
+{
+  "id": "offline-meetup",
+  "name": "社区线下交流会",
+  "formats": ["offline"],
+  "audience": "参与者",
+  "organizer": "主办方",
+  "notice_channel": "活动群",
+  "assistant_role": "线下活动咨询回复助手",
+  "router_role": "线下活动咨询系统的语义路由器",
+  "prompt_audience": "参与者",
+  "assignment_contact": "现场工作人员",
+  "serves": ["线下活动组织者", "现场签到志愿者"],
+  "knowledge": "activities/offline-meetup/faq.json",
+  "description": "只有线下会场的交流活动。用来确认活动包可以回答地点和签到，并明确说明没有线上直播。"
+}

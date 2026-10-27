@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from .workbench_session import WorkbenchItem
+
+
+REVIEW_STATUSES = {
+    "pending_review",
+    "sent",
+    "escalated",
+    "candidate_saved",
+    "review_completed",
+}
+MATCH_STATUSES = {"matched", "unmatched"}
+
+
+@dataclass(frozen=True)
+class ChatEvent:
+    event_id: str
+    group_id_hash: str
+    group_name: str
+    sender_alias: str
+    sender_role: str
+    message_time: str
+    content: str
+    raw_type: str
+    source: str
+
+
+@dataclass(frozen=True)
+class GroupConfig:
+    group_name: str
+    group_id_hash: str = ""
+    enabled: bool = True
+    mode: str = "semi_auto"
+    keywords: list[str] = field(
+        default_factory=lambda: ["报名", "住宿", "交通", "作业", "面试", "通知", "报到", "GPU", "算子"]
+    )
+    agent_mentions: list[str] = field(default_factory=lambda: ["@Agent", "@夏令营助手"])
+    auto_reply_intents: list[str] = field(default_factory=list)
+    daily_auto_reply_limit: int = 50
+
+
+@dataclass(frozen=True)
+class TriggerDecision:
+    should_process: bool
+    reasons: list[str]
+    matched_keywords: list[str]
+
+
+@dataclass(frozen=True)
+class ReplyCandidate:
+    candidate_id: str
+    group_name: str
+    original_question: str
+    agent_reply: str
+    edited_reply: str
+    source: str
+    confidence: float
+    candidate_type: str
+    status: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ReplyLogEntry:
+    log_id: str
+    group_name: str
+    trigger_message_hash: str
+    trigger_reasons: list[str]
+    mode: str
+    action: str
+    reply: str
+    source: str
+    confidence: float
+    operator_action: str
+    created_at: str
+    generation_mode: str = ""
+    generation_model: str = ""
+    generation_error: str = ""
+    semantic_status: str = ""
+    semantic_intent: str = ""
+    semantic_question: str = ""
+    semantic_confidence: float = 0.0
+    semantic_model: str = ""
+    semantic_error: str = ""
+    faq_confidence: float = 0.0
+    rag_confidence: float = 0.0
+    rag_query: str = ""
+
+
+@dataclass(frozen=True)
+class ReplyDecision:
+    mode: str
+    reply: str
+    source: str = ""
+    confidence: float = 0.0
+    reason: str = ""
+    requires_review: bool = True
+
+
+@dataclass(frozen=True)
+class StoredWorkbenchMessage:
+    message_id: str
+    item: "WorkbenchItem"
+    review_status: str
+    match_status: str
+    unmatched_reasons: list[str]
+    review_action: str = ""
+    review_note: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    completed_at: str = ""

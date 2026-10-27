@@ -1,0 +1,16 @@
+{
+  "id": "summer-camp",
+  "name": "开源英才夏令营",
+  "formats": ["online", "offline"],
+  "audience": "同学",
+  "organizer": "组委会",
+  "notice_channel": "官方咨询群",
+  "assistant_role": "夏令营咨询群回复助手",
+  "router_role": "夏令营咨询系统的语义路由器",
+  "prompt_audience": "学生",
+  "assignment_contact": "课程助教或导师",
+  "serves": ["夏令营组委会", "课程助教", "咨询群值班同学"],
+  "knowledge": "data/faq.json",
+  "documents": "data/rag/documents",
+  "description": "参考活动包。线上课程、作业答疑和线下入营共用一套知识库，并同步 MXMACA 算子优化社区的公开 Issue。"
+}

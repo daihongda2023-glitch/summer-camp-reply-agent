@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summer_camp_agent.engine import AnswerEngine
+from summer_camp_agent.engine import AnswerEngine, AnswerResult
 from summer_camp_agent.knowledge import KnowledgeBase
 from summer_camp_agent.review import OperatorReview, save_pending_question
 
@@ -14,6 +14,43 @@ def make_review():
 
 
 class OperatorReviewTest(unittest.TestCase):
+    def test_review_card_preserves_rag_ai_generation_metadata(self):
+        class StaticEngine:
+            def answer(self, question):
+                return AnswerResult(
+                    action="auto_reply",
+                    reply="AI 整理后的回复",
+                    intent="rag.document",
+                    source="官方 RAG",
+                    confidence=0.96,
+                    generation_mode="rag_ai",
+                    generation_model="fake-model",
+                    generation_error="",
+                    semantic_status="analyzed",
+                    semantic_intent="support.contact",
+                    semantic_question="遇到比赛问题应该联系谁？",
+                    semantic_confidence=0.94,
+                    semantic_model="semantic-model",
+                    semantic_error="",
+                    faq_confidence=0.50,
+                    rag_confidence=0.20,
+                    rag_query="比赛问题 联系人",
+                )
+
+        card = OperatorReview(StaticEngine()).create_card("比赛镜像能下载吗？")
+
+        self.assertEqual(card.generation_mode, "rag_ai")
+        self.assertEqual(card.generation_model, "fake-model")
+        self.assertEqual(card.generation_error, "")
+        self.assertEqual(card.semantic_status, "analyzed")
+        self.assertEqual(card.semantic_intent, "support.contact")
+        self.assertEqual(card.semantic_question, "遇到比赛问题应该联系谁？")
+        self.assertEqual(card.semantic_confidence, 0.94)
+        self.assertEqual(card.semantic_model, "semantic-model")
+        self.assertEqual(card.faq_confidence, 0.50)
+        self.assertEqual(card.rag_confidence, 0.20)
+        self.assertEqual(card.rag_query, "比赛问题 联系人")
+
     def test_auto_reply_question_recommends_send(self):
         card = make_review().create_card("报名入口在哪里？")
 
@@ -21,8 +58,9 @@ class OperatorReviewTest(unittest.TestCase):
         self.assertEqual(card.action, "auto_reply")
         self.assertIn("send", card.available_actions)
         self.assertIn("edit", card.available_actions)
-        self.assertIn("招募文章", card.source)
-        self.assertIn("https://v.wjx.cn/vm/r9BqUzR.aspx#", card.reply)
+        self.assertIn("官方咨询群海报", card.source)
+        self.assertIn("https://developer.metax-tech.com/activities/18", card.reply)
+        self.assertNotIn("v.wjx.cn", card.reply)
 
     def test_unknown_question_recommends_mark_pending_without_record_claim(self):
         card = make_review().create_card("营服是什么颜色？")

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "faq.session.link",
+    "stage": "活动进行中",
+    "intent": "session.link",
+    "question": "线上入口在哪里？",
+    "question_aliases": ["直播链接在哪里", "会议链接是什么"],
+    "keywords": ["线上", "直播", "链接"],
+    "answer": "线上会场入口：https://example.com/live/open-day 。线上和线下同步进行，可以只参加线上。",
+    "source": "开放日通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.venue.address",
+    "stage": "活动进行中",
+    "intent": "venue.address",
+    "question": "线下地点在哪里？",
+    "question_aliases": ["活动地点在哪里", "在哪里举办"],
+    "keywords": ["线下", "地点"],
+    "answer": "线下会场在上海市徐汇区示例路 8 号。现场签到后可以和线上会场同步。",
+    "source": "开放日通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.attendance.choice",
+    "stage": "活动进行中",
+    "intent": "attendance.choice",
+    "question": "可以只参加线上吗？",
+    "question_aliases": ["必须到现场吗", "只参加一种可以吗"],
+    "keywords": ["只参加", "必须"],
+    "answer": "可以。线上入口和线下会场同步进行，选择其中一种即可。",
+    "source": "开放日通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  }
+]

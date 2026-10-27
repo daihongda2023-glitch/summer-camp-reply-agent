@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "synced_at": "2026-07-20T15:51:39.080794+00:00",
+  "fetched_issues": 36,
+  "generated_official": 59,
+  "generated_community": 1,
+  "skipped_by_reason": {
+    "excluded_label:任务": 2,
+    "excluded_title:任务": 8,
+    "excluded_title:指导手册": 1,
+    "excluded_title:赛题：": 2,
+    "no_usable_answer": 11
+  },
+  "errors": [],
+  "repositories": [
+    {
+      "repository": "metax-maca/op_optimization",
+      "fetched_issues": 26,
+      "generated_official": 59,
+      "generated_community": 0,
+      "skipped_by_reason": {
+        "excluded_label:任务": 1,
+        "excluded_title:指导手册": 1,
+        "excluded_title:赛题：": 2,
+        "no_usable_answer": 11
+      }
+    },
+    {
+      "repository": "ccf-ai-infra/Intro-ops",
+      "fetched_issues": 10,
+      "generated_official": 0,
+      "generated_community": 1,
+      "skipped_by_reason": {
+        "excluded_label:任务": 1,
+        "excluded_title:任务": 8
+      }
+    }
+  ]
+}

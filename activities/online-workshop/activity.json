@@ -1,0 +1,15 @@
+{
+  "id": "online-workshop",
+  "name": "开源之夜线上分享",
+  "formats": ["online"],
+  "audience": "参与者",
+  "organizer": "主办方",
+  "notice_channel": "活动群",
+  "assistant_role": "线上活动咨询回复助手",
+  "router_role": "线上活动咨询系统的语义路由器",
+  "prompt_audience": "参与者",
+  "assignment_contact": "活动工作人员",
+  "serves": ["线上分享主讲人", "活动群值班志愿者"],
+  "knowledge": "activities/online-workshop/faq.json",
+  "description": "只有线上会场的分享活动。用来确认活动包可以回答直播入口，并明确说明没有线下会场。"
+}

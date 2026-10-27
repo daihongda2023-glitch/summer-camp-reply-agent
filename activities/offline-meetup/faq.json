@@ -1,0 +1,53 @@
+[
+  {
+    "id": "faq.venue.address",
+    "stage": "活动进行中",
+    "intent": "venue.address",
+    "question": "活动地点在哪里？",
+    "question_aliases": ["线下地点在哪里", "在哪里举办"],
+    "keywords": ["地点", "地址", "线下"],
+    "answer": "本场是线下活动，地点为上海市徐汇区示例路 1 号社区空间。请按报名确认里的签到时间到场。",
+    "source": "线下交流通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.checkin.time",
+    "stage": "活动进行中",
+    "intent": "checkin.time",
+    "question": "什么时候签到？",
+    "question_aliases": ["签到时间", "几点到场"],
+    "keywords": ["签到", "到场"],
+    "answer": "现场签到从 13:30 开始，活动 14:00 开始。请携带报名时使用的姓名到场。",
+    "source": "线下交流通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  },
+  {
+    "id": "faq.format.offline_only",
+    "stage": "活动进行中",
+    "intent": "format.offline_only",
+    "question": "有直播链接吗？",
+    "question_aliases": ["线上入口在哪里", "可以线上参加吗"],
+    "keywords": ["直播", "线上"],
+    "answer": "本场是线下活动，不提供线上直播。无法到场可以等待活动群里的纪要。",
+    "source": "线下交流通知",
+    "source_date": "2026-10-01",
+    "last_updated": "2026-10-01",
+    "valid_until": "2027-12-31",
+    "auto_reply": true,
+    "needs_human_fallback": false,
+    "human_fallback_reason": "",
+    "owner": "主办方"
+  }
+]
